@@ -6,6 +6,9 @@ const customerSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  fcmToken: {
+  type: String,
+},
   phone: {
     type: String,
     required: [true, 'Phone number is required'],

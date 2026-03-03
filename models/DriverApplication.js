@@ -1,4 +1,3 @@
-// models/DriverApplication.js
 import mongoose from 'mongoose';
 
 const documentVerificationSchema = new mongoose.Schema({
@@ -15,6 +14,18 @@ const documentVerificationSchema = new mongoose.Schema({
 const documentSchema = new mongoose.Schema({
   url: String,
   publicId: String,
+  uploadedAt: Date,
+  verification: {
+    type: documentVerificationSchema,
+    default: () => ({})
+  }
+}, { _id: false });
+
+// Aadhar Card Schema with number field
+const aadharDocumentSchema = new mongoose.Schema({
+  url: String,
+  publicId: String,
+  aadharNumber: String,
   uploadedAt: Date,
   verification: {
     type: documentVerificationSchema,
@@ -64,6 +75,9 @@ const driverApplicationSchema = new mongoose.Schema(
       required: true,
       unique: true,
     },
+    fcmToken: {
+      type: String,
+    },
     email: {
       type: String,
     },
@@ -87,9 +101,9 @@ const driverApplicationSchema = new mongoose.Schema(
       default: null
     },
 
-    // Aadhar Card
+    // Aadhar Card (updated with aadharNumber)
     aadharCard: {
-      type: documentSchema,
+      type: aadharDocumentSchema,
       default: null
     },
 
@@ -154,7 +168,7 @@ const driverApplicationSchema = new mongoose.Schema(
     // Overall application status
     verificationStatus: {
       type: String,
-      enum: ['pending', 'submitted', 'under_review', 'partially_verified', 'verified', 'rejected'],
+      enum: ['pending', 'submitted', 'under_review', 'partially_verified', 'verified', 'rejected', 'withdrawn'],
       default: 'pending',
     },
     rejectionReason: {
@@ -173,6 +187,37 @@ const driverApplicationSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// Indexes for performance
+driverApplicationSchema.index({ phone: 1 });
+driverApplicationSchema.index({ verificationStatus: 1 });
+driverApplicationSchema.index({ submittedAt: -1 });
+driverApplicationSchema.index({ 'aadharCard.aadharNumber': 1 });
+driverApplicationSchema.index({ 'drivingLicense.licenseNumber': 1 });
+driverApplicationSchema.index({ 'vehicleRC.rcNumber': 1 });
+
+// Pre-save middleware to validate document statuses
+driverApplicationSchema.pre('save', function(next) {
+  const documentTypes = ['profilePhoto', 'aadharCard', 'panCard', 'drivingLicense', 'vehicleRC', 'vehicleInsurance', 'vehiclePhoto'];
+  
+  for (const docType of documentTypes) {
+    if (this[docType] && this[docType].verification) {
+      // Ensure verification status is valid
+      if (!['pending', 'verified', 'rejected'].includes(this[docType].verification.status)) {
+        this[docType].verification.status = 'pending';
+      }
+    }
+  }
+  
+  // Validate bank verification if exists
+  if (this.bankDetails && this.bankDetails.verification) {
+    if (!['pending', 'verified', 'rejected'].includes(this.bankDetails.verification.status)) {
+      this.bankDetails.verification.status = 'pending';
+    }
+  }
+  
+  next();
+});
 
 // Method to calculate overall verification status
 driverApplicationSchema.methods.calculateOverallStatus = function() {
