@@ -21,8 +21,8 @@ import driverAuthRoutes from './routes/driverAuthRoutes.js';
 import supportRoutes from './routes/supportRoutes.js';
 import { initializeSupportSockets } from './sockets/supportSocketHandler.js';
 import verificationRoutes from './routes/verificationRoutes.js';
-import { errorHandler } from './middleware/errorMiddleware.js';
-
+// import { errorHandler } from './middleware/errorMiddleware.js';
+import os from "os";
 dotenv.config();
 
 const app = express();
@@ -133,7 +133,7 @@ app.use('*', (req, res) => {
 });
 
 // Global error handler
-app.use(errorHandler);
+// app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -148,9 +148,8 @@ server.listen(PORT, HOST, () => {
 
 // Helper to get local IP for network access
 function getLocalIp() {
-  const { networkInterfaces } = require('os');
-  const nets = networkInterfaces();
-  
+  const nets = os.networkInterfaces();
+
   for (const name of Object.keys(nets)) {
     for (const net of nets[name]) {
       if (net.family === 'IPv4' && !net.internal) {
