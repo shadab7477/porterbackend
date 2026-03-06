@@ -8,13 +8,9 @@ const OTP_EXPIRY_MINUTES = 15;
 export const sendOtp = async (req, res) => {
   try {
     const { mobile } = req.body;
+    console.log(req.body);
     
-    if (!mobile || !/^[0-9]{10}$/.test(mobile)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide valid 10-digit mobile number'
-      });
-    }
+  
     
     // Delete any existing OTP for this mobile
     await OTP.deleteOne({ mobile });
