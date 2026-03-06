@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
-import Driver from '../models/Driver.js'; // Make sure this path is correct
+import Driver from '../models/Driver.js';
+import DriverApplication from '../models/DriverApplication.js';
 
 const driverAuthMiddleware = async (req, res, next) => {
   try {
@@ -21,60 +22,99 @@ const driverAuthMiddleware = async (req, res, next) => {
       });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      console.log(decoded);
+      
+      // Check if this is a driver token (has id field) - for authenticated drivers
+      if (decoded.id) {
+        const driver = await Driver.findById(decoded.id).select('-password');
 
-    // Check if this is a driver token (has id field)
-    if (!decoded.id) {
+        if (!driver) {
+          return res.status(401).json({
+            success: false,
+            message: 'Driver not found'
+          });
+        }
+
+        // Check if driver is active/verified
+        if (driver.verificationStatus !== 'verified') {
+          return res.status(403).json({
+            success: false,
+            message: 'Driver account is not verified',
+            status: driver.verificationStatus
+          });
+        }
+
+        // Check if blocked
+        if (driver.isBlocked) {
+          return res.status(403).json({
+            success: false,
+            message: 'Driver account is blocked'
+          });
+        }
+
+        req.driver = driver;
+        req.userType = 'driver';
+        return next();
+      }
+      
+      // Check if this is a registration token (has phone and type field)
+      if (decoded.phone && decoded.type === 'driver_registration') {
+        // Verify that the phone has an application in progress
+        const application = await DriverApplication.findOne({ phone: decoded.phone });
+        console.log(application);
+        
+        // if (!application) {
+        //   return res.status(401).json({
+        //     success: false,
+        //     message: 'No registration found for this token'
+        //   });
+        // }
+
+        // if (application.verificationStatus === 'verified' || 
+        //     application.verificationStatus === 'submitted') {
+        //   return res.status(403).json({
+        //     success: false,
+        //     message: 'Registration already completed. Please login instead.',
+        //     status: application.verificationStatus
+        //   });
+        // }
+
+        req.phone = decoded.phone;
+        // req.application = application;
+        req.userType = 'registration';
+        return next();
+      }
+
+      // If token doesn't match either format
       return res.status(401).json({
         success: false,
         message: 'Invalid token format'
       });
+
+    } catch (jwtError) {
+      console.error('JWT verification error:', jwtError);
+
+      if (jwtError.name === 'JsonWebTokenError') {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid token'
+        });
+      }
+
+      if (jwtError.name === 'TokenExpiredError') {
+        return res.status(401).json({
+          success: false,
+          message: 'Token expired'
+        });
+      }
+
+      throw jwtError;
     }
 
-    const driver = await Driver.findById(decoded.id).select('-password');
-
-    if (!driver) {
-      return res.status(401).json({
-        success: false,
-        message: 'Driver not found'
-      });
-    }
-
-    // Check if driver is active/verified
-    if (driver.verificationStatus !== 'verified') {
-      return res.status(403).json({
-        success: false,
-        message: 'Driver account is not verified',
-        status: driver.verificationStatus
-      });
-    }
-
-    // Optional: check if blocked (if you have this field)
-    if (driver.isBlocked) {
-      return res.status(403).json({
-        success: false,
-        message: 'Driver account is blocked'
-      });
-    }
-
-    req.driver = driver;
-    next();
   } catch (error) {
     console.error('Auth middleware error:', error);
-
-    if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid token'
-      });
-    }
-
-    if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Token expired'
-      });
-    }
 
     return res.status(500).json({
       success: false,

@@ -2,16 +2,12 @@ import express from 'express';
 import {
   sendOTP,
   verifyOTP,
-  registerBasicInfo,
-  uploadDocument,
-  saveVehicleDetails,
-  saveBankDetails,
-  submitApplication,
+  completeRegistration,
   getApplicationStatus,
   getDriverProfile,
-  updateDocument
+  verifyDocument
 } from '../controllers/driverAuthController.js';
-import uploadMiddleware from '../middleware/uploadMiddleware.js'; // This imports the default export
+import uploadMiddleware from '../middleware/uploadMiddleware.js';
 import driverAuthMiddleware from '../middleware/driverAuthMiddleware.js';
 
 const router = express.Router();
@@ -21,15 +17,26 @@ router.post('/send-otp', sendOTP);
 router.post('/verify-otp', verifyOTP);
 router.get('/status/:phone', getApplicationStatus);
 
-// Routes that require temp token (registration flow)
-router.post('/register', registerBasicInfo);
-router.post('/upload/:documentType', uploadMiddleware.single('document'), uploadDocument); // Add .single('document')
-router.post('/vehicle-details', saveVehicleDetails);
-router.post('/bank-details', saveBankDetails);
-router.post('/submit', submitApplication);
+// Protected routes (require temp token)
+router.post(
+  '/register',
+  driverAuthMiddleware,
+  uploadMiddleware.fields([
+    { name: 'profilePhoto', maxCount: 1 },
+    { name: 'aadharFront', maxCount: 1 },
+    { name: 'aadharBack', maxCount: 1 },
+    { name: 'panCard', maxCount: 1 },
+    { name: 'drivingLicense', maxCount: 1 },
+    { name: 'vehicleRC', maxCount: 1 },
+    { name: 'vehiclePhoto', maxCount: 1 }
+  ]),
+  completeRegistration
+);
 
-// Routes that require full auth (after registration)
+// Get driver profile (requires auth)
 router.get('/profile', driverAuthMiddleware, getDriverProfile);
-router.put('/update-document/:documentType', driverAuthMiddleware, uploadMiddleware.single('document'), updateDocument); // Add .single('document')
+
+// Admin routes for document verification
+router.post('/verify-document', verifyDocument);
 
 export default router;

@@ -8,7 +8,11 @@ const documentVerificationSchema = new mongoose.Schema({
   },
   verifiedAt: Date,
   rejectionReason: String,
-  comments: String
+  comments: String,
+  verifiedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin'
+  }
 }, { _id: false });
 
 const documentSchema = new mongoose.Schema({
@@ -17,19 +21,25 @@ const documentSchema = new mongoose.Schema({
   uploadedAt: Date,
   verification: {
     type: documentVerificationSchema,
-    default: () => ({})
+    default: () => ({ status: 'pending' })
   }
 }, { _id: false });
 
-// Aadhar Card Schema with number field
+// Updated Aadhar Card Schema with front and back images
 const aadharDocumentSchema = new mongoose.Schema({
-  url: String,
-  publicId: String,
+  front: {
+    type: documentSchema,
+    default: null
+  },
+  back: {
+    type: documentSchema,
+    default: null
+  },
   aadharNumber: String,
   uploadedAt: Date,
   verification: {
     type: documentVerificationSchema,
-    default: () => ({})
+    default: () => ({ status: 'pending' })
   }
 }, { _id: false });
 
@@ -41,7 +51,7 @@ const drivingLicenseDocumentSchema = new mongoose.Schema({
   uploadedAt: Date,
   verification: {
     type: documentVerificationSchema,
-    default: () => ({})
+    default: () => ({ status: 'pending' })
   }
 }, { _id: false });
 
@@ -52,19 +62,19 @@ const vehicleRCDocumentSchema = new mongoose.Schema({
   uploadedAt: Date,
   verification: {
     type: documentVerificationSchema,
-    default: () => ({})
+    default: () => ({ status: 'pending' })
   }
 }, { _id: false });
 
-const vehicleInsuranceDocumentSchema = new mongoose.Schema({
-  url: String,
-  publicId: String,
-  policyNumber: String,
-  expiryDate: Date,
-  uploadedAt: Date,
+const bankDetailsSchema = new mongoose.Schema({
+  accountHolderName: String,
+  accountNumber: String,
+  ifscCode: String,
+  bankName: String,
+  branchName: String,
   verification: {
     type: documentVerificationSchema,
-    default: () => ({})
+    default: () => ({ status: 'pending' })
   }
 }, { _id: false });
 
@@ -101,7 +111,7 @@ const driverApplicationSchema = new mongoose.Schema(
       default: null
     },
 
-    // Aadhar Card (updated with aadharNumber)
+    // Aadhar Card with front and back images
     aadharCard: {
       type: aadharDocumentSchema,
       default: null
@@ -122,12 +132,6 @@ const driverApplicationSchema = new mongoose.Schema(
     // Vehicle RC
     vehicleRC: {
       type: vehicleRCDocumentSchema,
-      default: null
-    },
-
-    // Vehicle Insurance
-    vehicleInsurance: {
-      type: vehicleInsuranceDocumentSchema,
       default: null
     },
 
@@ -154,15 +158,8 @@ const driverApplicationSchema = new mongoose.Schema(
     },
 
     bankDetails: {
-      accountHolderName: String,
-      accountNumber: String,
-      ifscCode: String,
-      bankName: String,
-      branchName: String,
-      verification: {
-        type: documentVerificationSchema,
-        default: () => ({})
-      }
+      type: bankDetailsSchema,
+      default: null
     },
 
     // Overall application status
@@ -198,13 +195,41 @@ driverApplicationSchema.index({ 'vehicleRC.rcNumber': 1 });
 
 // Pre-save middleware to validate document statuses
 driverApplicationSchema.pre('save', function(next) {
-  const documentTypes = ['profilePhoto', 'aadharCard', 'panCard', 'drivingLicense', 'vehicleRC', 'vehicleInsurance', 'vehiclePhoto'];
+  const documentTypes = [
+    'profilePhoto', 
+    'aadharCard', 
+    'panCard', 
+    'drivingLicense', 
+    'vehicleRC', 
+    'vehiclePhoto'
+  ];
   
   for (const docType of documentTypes) {
-    if (this[docType] && this[docType].verification) {
-      // Ensure verification status is valid
-      if (!['pending', 'verified', 'rejected'].includes(this[docType].verification.status)) {
-        this[docType].verification.status = 'pending';
+    if (this[docType]) {
+      // For aadharCard which has nested structure
+      if (docType === 'aadharCard') {
+        if (this[docType].front && this[docType].front.verification) {
+          if (!['pending', 'verified', 'rejected'].includes(this[docType].front.verification.status)) {
+            this[docType].front.verification.status = 'pending';
+          }
+        }
+        if (this[docType].back && this[docType].back.verification) {
+          if (!['pending', 'verified', 'rejected'].includes(this[docType].back.verification.status)) {
+            this[docType].back.verification.status = 'pending';
+          }
+        }
+        if (this[docType].verification) {
+          if (!['pending', 'verified', 'rejected'].includes(this[docType].verification.status)) {
+            this[docType].verification.status = 'pending';
+          }
+        }
+      } else {
+        // For regular documents
+        if (this[docType].verification) {
+          if (!['pending', 'verified', 'rejected'].includes(this[docType].verification.status)) {
+            this[docType].verification.status = 'pending';
+          }
+        }
       }
     }
   }
@@ -221,31 +246,66 @@ driverApplicationSchema.pre('save', function(next) {
 
 // Method to calculate overall verification status
 driverApplicationSchema.methods.calculateOverallStatus = function() {
-  const documents = [
-    this.profilePhoto,
-    this.aadharCard,
-    this.panCard,
-    this.drivingLicense,
-    this.vehicleRC,
-    this.vehicleInsurance,
-    this.vehiclePhoto
-  ].filter(doc => doc !== null && doc.url);
+  // Check profile photo
+  const profilePhotoVerified = !this.profilePhoto || 
+    (this.profilePhoto.verification?.status === 'verified');
+  
+  // Check aadhar card (both front and back)
+  const aadharFrontVerified = !this.aadharCard?.front || 
+    (this.aadharCard.front.verification?.status === 'verified');
+  const aadharBackVerified = !this.aadharCard?.back || 
+    (this.aadharCard.back.verification?.status === 'verified');
+  const aadharVerified = aadharFrontVerified && aadharBackVerified;
+  
+  // Check pan card
+  const panVerified = !this.panCard || 
+    (this.panCard.verification?.status === 'verified');
+  
+  // Check driving license
+  const licenseVerified = !this.drivingLicense || 
+    (this.drivingLicense.verification?.status === 'verified');
+  
+  // Check vehicle RC
+  const rcVerified = !this.vehicleRC || 
+    (this.vehicleRC.verification?.status === 'verified');
+  
+  // Check vehicle photo
+  const vehiclePhotoVerified = !this.vehiclePhoto || 
+    (this.vehiclePhoto.verification?.status === 'verified');
+  
+  // Check bank details
+  const bankVerified = !this.bankDetails || 
+    (this.bankDetails.verification?.status === 'verified');
 
-  if (documents.length === 0) return 'pending';
+  // Check for any rejections
+  const anyRejected = 
+    (this.profilePhoto?.verification?.status === 'rejected') ||
+    (this.aadharCard?.front?.verification?.status === 'rejected') ||
+    (this.aadharCard?.back?.verification?.status === 'rejected') ||
+    (this.panCard?.verification?.status === 'rejected') ||
+    (this.drivingLicense?.verification?.status === 'rejected') ||
+    (this.vehicleRC?.verification?.status === 'rejected') ||
+    (this.vehiclePhoto?.verification?.status === 'rejected') ||
+    (this.bankDetails?.verification?.status === 'rejected');
 
-  const allVerified = documents.every(doc => doc.verification?.status === 'verified') && 
-                     (!this.bankDetails?.accountNumber || this.bankDetails?.verification?.status === 'verified');
-  const anyRejected = documents.some(doc => doc.verification?.status === 'rejected') ||
-                      (this.bankDetails?.accountNumber && this.bankDetails?.verification?.status === 'rejected');
-  const allRejected = documents.every(doc => doc.verification?.status === 'rejected') &&
-                      (!this.bankDetails?.accountNumber || this.bankDetails?.verification?.status === 'rejected');
-  const anyPending = documents.some(doc => !doc.verification?.status || doc.verification?.status === 'pending') ||
-                     (this.bankDetails?.accountNumber && (!this.bankDetails?.verification?.status || this.bankDetails?.verification?.status === 'pending'));
+  // Check for any pending verifications
+  const anyPending = 
+    (this.profilePhoto?.verification?.status === 'pending') ||
+    (this.aadharCard?.front?.verification?.status === 'pending') ||
+    (this.aadharCard?.back?.verification?.status === 'pending') ||
+    (this.panCard?.verification?.status === 'pending') ||
+    (this.drivingLicense?.verification?.status === 'pending') ||
+    (this.vehicleRC?.verification?.status === 'pending') ||
+    (this.vehiclePhoto?.verification?.status === 'pending') ||
+    (this.bankDetails?.verification?.status === 'pending');
 
-  if (allRejected) return 'rejected';
-  if (allVerified) return 'verified';
+  // Check if all documents are verified
+  const allVerified = profilePhotoVerified && aadharVerified && panVerified && 
+                      licenseVerified && rcVerified && vehiclePhotoVerified && bankVerified;
+
   if (anyRejected) return 'partially_verified';
   if (anyPending) return 'under_review';
+  if (allVerified) return 'verified';
   
   return this.verificationStatus;
 };
