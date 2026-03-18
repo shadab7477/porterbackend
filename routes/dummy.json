@@ -1,0 +1,30 @@
+{
+  "success": true,
+  "message": "Login successful",
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5YjkwNzgzNWExZGJhMWRmMTk1ZmMzYSIsInBob25lIjoiNzQ3NzI0NjQ3NyIsInR5cGUiOiJkcml2ZXJfYXV0aCIsInJvbGUiOiJkcml2ZXIiLCJpYXQiOjE3NzM3MzM3NjMsImV4cCI6MTc3NjMyNTc2M30.I7gj-Z5fbg6qyD8hPyNT-Wx7FhKa1BmNGOVNi3AA0B8",
+    "driver": {
+      "id": "69b907835a1dba1df195fc3a",
+      "driverId": "DRV33763124",
+      "name": "Shadab Khan",
+      "phone": "7477246477",
+      "email": "techshad04@gmail.com",
+      "isOnline": false,
+      "isAvailable": true,
+      "vehicleType": "Bike",
+      "vehicleNumber": "MP-14 CA 52433",
+      "applicationStatus": "verified"
+    }
+  }
+}
+
+
+
+
+
+
+
+
+
+// User token
+// token	eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5YjkxOGQ3YTQ1NzhlYzZkYjUxMjQ2OCIsInBob25lIjoiNzA0OTY4ODUxMCIsInJvbGUiOiJjdXN0b21lciIsImlhdCI6MTc3MzczODE5OSwiZXhwIjoxNzc0MzQyOTk5fQ.uOclQYpOSKQqdhHvLAa8LYizxF-Zh8zjIpF0qM3osNk

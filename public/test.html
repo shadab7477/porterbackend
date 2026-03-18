@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Porter Test - Driver & User Workflow</title>
+  <style>
+    body { font-family: monospace; padding: 20px; max-width: 1200px; margin: 0 auto; }
+    h1, h2 { margin-top: 20px; }
+    .section { border: 1px solid #ccc; padding: 15px; margin: 10px 0; }
+    button { padding: 8px 16px; margin: 5px; cursor: pointer; }
+    input, select { padding: 5px; margin: 5px; }
+    #logs { background: #f5f5f5; padding: 10px; height: 200px; overflow-y: auto; border: 1px solid #ccc; }
+    .log-entry { margin: 2px 0; }
+    .driver { color: blue; }
+    .user { color: green; }
+    .event { color: purple; }
+    .error { color: red; }
+    .success { color: darkgreen; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    .online { background: #90EE90; }
+    .offline { background: #FFB6C1; }
+  </style>
+</head>
+<body>
+  <h1>Porter Test - Driver & User Workflow</h1>
+  
+  <div class="section">
+    <h2>1. Connection Setup</h2>
+    <button onclick="connectSockets()">Connect Sockets</button>
+    <button onclick="disconnectSockets()">Disconnect</button>
+    <span id="connection-status">Disconnected</span>
+  </div>
+
+  <div class="section">
+    <h2>1.5. Quick Test - Create Test Driver</h2>
+    <select id="testVehicleType">
+      <option value="bike">Bike</option>
+      <option value="auto">Auto</option>
+      <option value="car">Car</option>
+    </select>
+    <button onclick="createTestDriver()">Create Test Driver</button>
+  </div>
+
+  <div class="section">
+    <h2>2. Driver Flow</h2>
+    <input type="text" id="driverId" placeholder="Driver ID">
+    <button onclick="driverJoin()">Driver Join</button>
+    <button onclick="driverOnline()">Go Online</button>
+    <button onclick="driverOffline()">Go Offline</button>
+    <br>
+    Lat: <input type="number" id="driverLat" value="28.6139" step="0.0001">
+    Lon: <input type="number" id="driverLon" value="77.2090" step="0.0001">
+    <button onclick="updateDriverLocation()">Update Location</button>
+    <br>
+    <button onclick="toggleDriverActive()">Toggle Active (API)</button>
+  </div>
+
+  <div class="section">
+    <h2>3. User/Customer Flow</h2>
+    <select id="vehicleType">
+      <option value="">All Vehicles</option>
+      <option value="bike">Bike</option>
+      <option value="auto">Auto</option>
+      <option value="car">Car</option>
+    </select>
+    <button onclick="searchDrivers()">Search Drivers (Socket)</button>
+    <button onclick="searchDriversAPI()">Search Drivers (API)</button>
+    <button onclick="subscribeDrivers()">Subscribe to Updates</button>
+  </div>
+
+  <div class="section">
+    <h2>4. Booking Flow</h2>
+    <input type="text" id="orderCustomerId" placeholder="Customer ID" value="customer123">
+    <input type="text" id="orderDriverId" placeholder="Driver ID">
+    <input type="text" id="pickupAddress" placeholder="Pickup Address" value="Delhi">
+    <input type="text" id="dropAddress" placeholder="Drop Address" value="Noida">
+    <br>
+    <button onclick="createOrder()">Create Order (API)</button>
+    <button onclick="acceptBooking()">Accept Booking</button>
+    <button onclick="rejectBooking()">Reject Booking</button>
+  </div>
+
+  <div class="section">
+    <h2>5. Available Drivers</h2>
+    <button onclick="getAvailableDrivers()">Get Available (API)</button>
+    <button onclick="getAllDrivers()">Get All Drivers (API)</button>
+    <div id="drivers-list"></div>
+  </div>
+
+  <div class="section">
+    <h2>6. Logs</h2>
+    <button onclick="clearLogs()">Clear</button>
+    <div id="logs"></div>
+  </div>
+
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script>
+    const API_URL = 'http://localhost:5000';
+    let mainSocket, driverSocket;
+    let driverId = '';
+    let currentOrderId = '';
+
+    function log(msg, type = '') {
+      const logs = document.getElementById('logs');
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${type}`;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      logs.appendChild(entry);
+      logs.scrollTop = logs.scrollHeight;
+    }
+
+    function connectSockets() {
+      mainSocket = io(API_URL, { transports: ['websocket'] });
+      driverSocket = io(API_URL + '/drivers', { transports: ['websocket'] });
+
+      mainSocket.on('connect', () => {
+        log('Main socket connected', 'success');
+        document.getElementById('connection-status').textContent = 'Connected';
+      });
+
+      mainSocket.on('disconnect', () => {
+        log('Main socket disconnected', 'error');
+        document.getElementById('connection-status').textContent = 'Disconnected';
+      });
+
+      driverSocket.on('connect', () => {
+        log('Driver socket connected', 'success');
+      });
+
+      // Main namespace events
+      mainSocket.on('drivers:update', (data) => {
+        log('DRIVERS UPDATE: ' + JSON.stringify(data), 'event');
+      });
+
+      mainSocket.on('drivers:search-results', (data) => {
+        log('SEARCH RESULTS: ' + data.drivers.length + ' drivers', 'success');
+        displayDrivers(data.drivers);
+      });
+
+      mainSocket.on('drivers:search-error', (data) => {
+        log('SEARCH ERROR: ' + data.message, 'error');
+      });
+
+      // Driver namespace events
+      driverSocket.on('driver:online', (data) => {
+        log('DRIVER ONLINE: ' + data.driverId, 'success');
+      });
+
+      driverSocket.on('driver:offline', (data) => {
+        log('DRIVER OFFLINE: ' + data.driverId, 'event');
+      });
+
+      driverSocket.on('driver:location-update', (data) => {
+        log('LOCATION UPDATE: ' + data.driverId, 'event');
+      });
+
+      driverSocket.on('booking:assigned-to-me', (data) => {
+        log('BOOKING ASSIGNED: ' + JSON.stringify(data), 'user');
+        currentOrderId = data.orderId;
+      });
+
+      // Bookings namespace
+      const bookingsNsp = io(API_URL + '/bookings', { transports: ['websocket'] });
+      bookingsNsp.on('connect', () => {
+        log('Bookings namespace connected', 'success');
+      });
+
+      bookingsNsp.on('booking:status-updated', (data) => {
+        log('BOOKING STATUS: ' + JSON.stringify(data), 'user');
+      });
+    }
+
+    function disconnectSockets() {
+      if (mainSocket) mainSocket.disconnect();
+      if (driverSocket) driverSocket.disconnect();
+      log('Disconnected', 'error');
+    }
+
+    function driverJoin() {
+      driverId = document.getElementById('driverId').value;
+      if (!driverId) {
+        log('Please enter driver ID', 'error');
+        return;
+      }
+      driverSocket.emit('driver:join', driverId);
+      log('Driver joining: ' + driverId, 'driver');
+    }
+
+    function driverOnline() {
+      if (!driverId) { log('Driver not joined', 'error'); return; }
+      driverSocket.emit('driver:availability-update', { driverId, isAvailable: true });
+      log('Driver going online', 'driver');
+    }
+
+    function driverOffline() {
+      if (!driverId) { log('Driver not joined', 'error'); return; }
+      driverSocket.emit('driver:availability-update', { driverId, isAvailable: false });
+      log('Driver going offline', 'driver');
+    }
+
+    function updateDriverLocation() {
+      if (!driverId) { log('Driver not joined', 'error'); return; }
+      const lat = parseFloat(document.getElementById('driverLat').value);
+      const lon = parseFloat(document.getElementById('driverLon').value);
+      driverSocket.emit('driver:location-update', { driverId, latitude: lat, longitude: lon });
+      log('Location updated: ' + lat + ', ' + lon, 'driver');
+    }
+
+    function toggleDriverActive() {
+      const id = document.getElementById('driverId').value;
+      if (!id) { log('Enter driver ID', 'error'); return; }
+      fetch(API_URL + '/api/drivers/' + id + '/active', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' }
+      }).then(r => r.json()).then(d => {
+        log('Active toggled: ' + JSON.stringify(d), 'success');
+      }).catch(e => log('Error: ' + e, 'error'));
+    }
+
+    function searchDrivers() {
+      const vehicleType = document.getElementById('vehicleType').value;
+      const lat = parseFloat(document.getElementById('driverLat').value);
+      const lon = parseFloat(document.getElementById('driverLon').value);
+      mainSocket.emit('drivers:search', { vehicleType, latitude: lat, longitude: lon, radius: 10000 });
+      log('Searching drivers...', 'user');
+    }
+
+    function searchDriversAPI() {
+      const vehicleType = document.getElementById('vehicleType').value;
+      fetch(API_URL + '/api/drivers/available?vehicleType=' + vehicleType)
+        .then(r => r.json())
+        .then(d => {
+          log('API: Found ' + d.data.length + ' drivers', 'success');
+          displayDrivers(d.data);
+        })
+        .catch(e => log('Error: ' + e, 'error'));
+    }
+
+    function subscribeDrivers() {
+      const vehicleType = document.getElementById('vehicleType').value;
+      mainSocket.emit('drivers:subscribe', { vehicleType });
+      log('Subscribed to driver updates', 'user');
+    }
+
+    function getAvailableDrivers() {
+      fetch(API_URL + '/api/drivers/available')
+        .then(r => r.json())
+        .then(d => displayDrivers(d.data))
+        .catch(e => log('Error: ' + e, 'error'));
+    }
+
+    function getAllDrivers() {
+      fetch(API_URL + '/api/drivers')
+        .then(r => r.json())
+        .then(d => displayDrivers(d.data))
+        .catch(e => log('Error: ' + e, 'error'));
+    }
+
+    function displayDrivers(drivers) {
+      const div = document.getElementById('drivers-list');
+      if (!drivers || drivers.length === 0) {
+        div.innerHTML = 'No drivers found';
+        return;
+      }
+      let html = '<table><tr><th>ID</th><th>Name</th><th>Vehicle</th><th>Number</th><th>Online</th><th>Available</th></tr>';
+      drivers.forEach(d => {
+        html += `<tr>
+          <td>${d._id}</td>
+          <td>${d.name || '-'}</td>
+          <td>${d.vehicleType || '-'}</td>
+          <td>${d.vehicleNumber || '-'}</td>
+          <td class="${d.isOnline ? 'online' : 'offline'}">${d.isOnline ? 'Yes' : 'No'}</td>
+          <td class="${d.isAvailable ? 'online' : 'offline'}">${d.isAvailable ? 'Yes' : 'No'}</td>
+        </tr>`;
+      });
+      html += '</table>';
+      div.innerHTML = html;
+    }
+
+    function createOrder() {
+      const customerId = document.getElementById('orderCustomerId').value;
+      const pickup = document.getElementById('pickupAddress').value;
+      const drop = document.getElementById('dropAddress').value;
+      
+      fetch(API_URL + '/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId,
+          pickupAddress: pickup,
+          dropAddress: drop,
+          status: 'pending'
+        })
+      }).then(r => r.json()).then(d => {
+        currentOrderId = d.data?._id || '';
+        log('Order created: ' + currentOrderId, 'success');
+      }).catch(e => log('Error: ' + e, 'error'));
+    }
+
+    function acceptBooking() {
+      const driverIdInput = document.getElementById('orderDriverId').value;
+      if (!driverIdInput || !currentOrderId) { log('Need driver ID and order', 'error'); return; }
+      driverSocket.emit('driver:accept-booking', { orderId: currentOrderId, driverId: driverIdInput });
+      log('Booking accepted', 'driver');
+    }
+
+    function rejectBooking() {
+      const driverIdInput = document.getElementById('orderDriverId').value;
+      if (!driverIdInput || !currentOrderId) { log('Need driver ID and order', 'error'); return; }
+      driverSocket.emit('driver:reject-booking', { orderId: currentOrderId, driverId: driverIdInput, reason: 'Busy' });
+      log('Booking rejected', 'driver');
+    }
+
+    function clearLogs() {
+      document.getElementById('logs').innerHTML = '';
+    }
+
+    function createTestDriver() {
+      const vehicleType = document.getElementById('testVehicleType').value;
+      fetch(API_URL + '/api/drivers/test-create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vehicleType })
+      }).then(r => r.json()).then(d => {
+        if (d.success) {
+          document.getElementById('driverId').value = d.data._id;
+          log('Test driver created: ' + d.data._id, 'success');
+        } else {
+          log('Error: ' + d.message, 'error');
+        }
+      }).catch(e => log('Error: ' + e, 'error'));
+    }
+  </script>
+</body>
+</html>
