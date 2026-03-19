@@ -1,23 +1,22 @@
+// controllers/paymentController.js
 import Razorpay from 'razorpay';
 import Ride from '../models/Ride.js';
 import Payment from '../models/Payment.js';
 import crypto from 'crypto';
 
-// Initialize Razorpay
+// Initialize Razorpay with your live keys
 const razorpay = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET
+    key_id: process.env.RAZORPAY_KEY_ID || 'rzp_live_ST0TZQUt1IwsqU',
+    key_secret: process.env.RAZORPAY_KEY_SECRET || 'OZdye2d48zaLY1gSko96eJsX'
 });
 
 // ==================== CREATE PAYMENT ORDER ====================
-// Called right after ride is requested (or before driver arrives).
-// Returns order details so the mobile app can collect payment via Razorpay SDK.
 export const createPaymentOrder = async (req, res) => {
     try {
         const customerId = req.customerId;
         const { rideId } = req.body;
         
-        console.log("Creating Razorpay order for ride:", rideId);
+        console.log("📝 Creating Razorpay order for ride:", rideId);
 
         if (!rideId) {
             return res.status(400).json({ success: false, message: 'rideId is required' });
@@ -53,11 +52,12 @@ export const createPaymentOrder = async (req, res) => {
         // Amount in paise (Razorpay uses smallest currency unit)
         const amountInPaise = Math.round(ride.fare.finalAmount * 100);
 
-        // Create order in Razorpay
+        // Create order in Razorpay with UPI support
         const options = {
             amount: amountInPaise,
             currency: 'INR',
             receipt: `receipt_${ride.rideId}`,
+            payment_capture: 1,
             notes: {
                 rideId: ride.rideId,
                 customerId: customerId.toString(),
@@ -68,9 +68,10 @@ export const createPaymentOrder = async (req, res) => {
         };
 
         const order = await razorpay.orders.create(options);
+        console.log("✅ Order created:", order.id);
 
-        // Store order ID on the ride, mark as processing
-        ride.paymentIntentId = order.id; // Reusing the same field name for Razorpay order ID
+        // Store order ID on the ride
+        ride.paymentIntentId = order.id;
         ride.paymentStatus = 'processing';
         await ride.save();
 
@@ -82,7 +83,12 @@ export const createPaymentOrder = async (req, res) => {
             amount: ride.fare.finalAmount,
             method: ride.paymentMethod,
             status: 'pending',
-            transactionId: order.id
+            transactionId: order.id,
+            metadata: {
+                orderId: order.id,
+                amount: amountInPaise,
+                currency: 'INR'
+            }
         });
         await payment.save();
 
@@ -93,7 +99,7 @@ export const createPaymentOrder = async (req, res) => {
                 amount: order.amount,
                 amountInPaise: amountInPaise,
                 currency: order.currency,
-                keyId: process.env.RAZORPAY_KEY_ID,
+                keyId: process.env.RAZORPAY_KEY_ID || 'rzp_live_ST0TZQUt1IwsqU',
                 customerName: ride.customer.name || 'Customer',
                 customerEmail: req.customerEmail || '',
                 customerPhone: ride.customer.phone || '',
@@ -106,7 +112,7 @@ export const createPaymentOrder = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Create Razorpay order error:', error);
+        console.error('❌ Create Razorpay order error:', error);
         res.status(500).json({
             success: false,
             message: error.message || 'Failed to create payment order'
@@ -114,9 +120,7 @@ export const createPaymentOrder = async (req, res) => {
     }
 };
 
-// ==================== VERIFY PAYMENT ====================
-// Called by the mobile app after Razorpay payment is successful on client side.
-// Verifies the payment signature and updates the ride record.
+// ==================== VERIFY PAYMENT SIGNATURE ====================
 export const verifyPayment = async (req, res) => {
     try {
         const customerId = req.customerId;
@@ -126,6 +130,8 @@ export const verifyPayment = async (req, res) => {
             razorpay_order_id, 
             razorpay_signature 
         } = req.body;
+
+        console.log("🔍 Verifying payment:", { rideId, razorpay_order_id, razorpay_payment_id });
 
         if (!rideId || !razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
             return res.status(400).json({ 
@@ -147,9 +153,13 @@ export const verifyPayment = async (req, res) => {
         // Generate signature for verification
         const body = razorpay_order_id + "|" + razorpay_payment_id;
         const expectedSignature = crypto
-            .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+            .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET || 'OZdye2d48zaLY1gSko96eJsX')
             .update(body.toString())
             .digest('hex');
+
+        console.log("🔐 Signature verification:");
+        console.log("Expected:", expectedSignature);
+        console.log("Received:", razorpay_signature);
 
         // Verify signature
         if (expectedSignature === razorpay_signature) {
@@ -164,19 +174,27 @@ export const verifyPayment = async (req, res) => {
                 {
                     status: 'success',
                     transactionId: razorpay_payment_id,
-                    paidAt: new Date()
+                    paidAt: new Date(),
+                    metadata: {
+                        paymentId: razorpay_payment_id,
+                        signature: razorpay_signature,
+                        verifiedAt: new Date().toISOString()
+                    }
                 }
             );
 
             // Notify driver via socket that payment is done
             const io = req.app.get('io');
-            io.emit(`ride:${ride.rideId}:payment_confirmed`, {
-                rideId: ride.rideId,
-                message: 'Payment confirmed. You can now start the ride.',
-                paymentId: razorpay_payment_id,
-                orderId: razorpay_order_id,
-                amount: ride.fare.finalAmount
-            });
+            if (io) {
+                io.emit(`ride:${ride.rideId}:payment_confirmed`, {
+                    rideId: ride.rideId,
+                    message: 'Payment confirmed. You can now start the ride.',
+                    paymentId: razorpay_payment_id,
+                    orderId: razorpay_order_id,
+                    amount: ride.fare.finalAmount,
+                    paymentMethod: 'UPI'
+                });
+            }
 
             return res.json({
                 success: true,
@@ -186,17 +204,27 @@ export const verifyPayment = async (req, res) => {
                     paymentStatus: 'completed',
                     paymentId: razorpay_payment_id,
                     orderId: razorpay_order_id,
-                    amount: ride.fare.finalAmount
+                    amount: ride.fare.finalAmount,
+                    paymentMethod: 'UPI'
                 }
             });
         } else {
             // Signature verification failed
+            console.error("❌ Signature verification failed");
+            
             ride.paymentStatus = 'failed';
             await ride.save();
 
             await Payment.findOneAndUpdate(
                 { paymentId: razorpay_order_id },
-                { status: 'failed' }
+                { 
+                    status: 'failed',
+                    metadata: {
+                        error: 'Signature verification failed',
+                        expectedSignature,
+                        receivedSignature: razorpay_signature
+                    }
+                }
             );
 
             return res.status(400).json({
@@ -206,7 +234,7 @@ export const verifyPayment = async (req, res) => {
         }
 
     } catch (error) {
-        console.error('Verify payment error:', error);
+        console.error('❌ Verify payment error:', error);
         res.status(500).json({
             success: false,
             message: error.message || 'Failed to verify payment'
@@ -215,7 +243,6 @@ export const verifyPayment = async (req, res) => {
 };
 
 // ==================== GET PAYMENT STATUS ====================
-// Lightweight status check for a ride's payment
 export const getPaymentStatus = async (req, res) => {
     try {
         const customerId = req.customerId;
@@ -238,8 +265,20 @@ export const getPaymentStatus = async (req, res) => {
             razorpayStatus = payment.status;
             paymentDetails = {
                 paymentId: payment.transactionId,
-                paidAt: payment.paidAt
+                paidAt: payment.paidAt,
+                method: payment.method,
+                metadata: payment.metadata
             };
+        }
+
+        // If payment is completed, try to fetch from Razorpay
+        if (ride.paymentStatus === 'completed' && ride.paymentIntentId) {
+            try {
+                const razorpayPayment = await razorpay.orders.fetch(ride.paymentIntentId);
+                razorpayStatus = razorpayPayment.status;
+            } catch (e) {
+                console.log('Could not fetch from Razorpay:', e.message);
+            }
         }
 
         res.json({
@@ -251,12 +290,16 @@ export const getPaymentStatus = async (req, res) => {
                 orderId: ride.paymentIntentId,
                 razorpayStatus,
                 amount: ride.fare.finalAmount,
-                paymentDetails
+                paymentDetails,
+                upiDetails: ride.paymentMethod === 'upi' ? {
+                    vpa: payment?.metadata?.vpa || 'N/A',
+                    transactionId: payment?.transactionId
+                } : null
             }
         });
 
     } catch (error) {
-        console.error('Get payment status error:', error);
+        console.error('❌ Get payment status error:', error);
         res.status(500).json({ 
             success: false, 
             message: error.message || 'Failed to get payment status' 
@@ -265,24 +308,29 @@ export const getPaymentStatus = async (req, res) => {
 };
 
 // ==================== RAZORPAY WEBHOOK ====================
-// Handle Razorpay webhook events for payment status updates
 export const handleRazorpayWebhook = async (req, res) => {
     try {
-        const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+        const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || '@nJb2@ULG3j@rPh';
+        
+        console.log("📨 Webhook received at:", new Date().toISOString());
         
         // Verify webhook signature
         const shasum = crypto.createHmac('sha256', webhookSecret);
         shasum.update(JSON.stringify(req.body));
         const digest = shasum.digest('hex');
 
+        console.log("🔐 Webhook Signature - Expected:", digest);
+        console.log("🔐 Webhook Signature - Received:", req.headers['x-razorpay-signature']);
+
         if (digest !== req.headers['x-razorpay-signature']) {
+            console.error('❌ Invalid webhook signature');
             return res.status(400).json({ success: false, message: 'Invalid signature' });
         }
 
         const event = req.body.event;
         const payload = req.body.payload;
 
-        console.log('Razorpay Webhook Event:', event);
+        console.log('✅ Webhook event:', event);
 
         // Handle different event types
         switch (event) {
@@ -291,12 +339,20 @@ export const handleRazorpayWebhook = async (req, res) => {
                 const paymentEntity = payload.payment.entity;
                 const orderId = paymentEntity.order_id;
                 
+                console.log('💰 Payment captured:', {
+                    orderId,
+                    paymentId: paymentEntity.id,
+                    amount: paymentEntity.amount / 100,
+                    method: paymentEntity.method
+                });
+
                 // Find ride by paymentIntentId (which stores Razorpay order ID)
                 const ride = await Ride.findOne({ paymentIntentId: orderId });
                 
                 if (ride) {
                     ride.paymentStatus = 'completed';
                     await ride.save();
+                    console.log('✅ Ride payment status updated:', ride.rideId);
 
                     // Update payment record
                     await Payment.findOneAndUpdate(
@@ -304,9 +360,18 @@ export const handleRazorpayWebhook = async (req, res) => {
                         {
                             status: 'success',
                             transactionId: paymentEntity.id,
-                            paidAt: new Date()
+                            paidAt: new Date(),
+                            method: paymentEntity.method,
+                            metadata: {
+                                paymentId: paymentEntity.id,
+                                method: paymentEntity.method,
+                                vpa: paymentEntity.vpa,
+                                bank: paymentEntity.bank,
+                                capturedAt: new Date().toISOString()
+                            }
                         }
                     );
+                    console.log('✅ Payment record updated');
 
                     // Notify via socket if needed
                     const io = req.app.get('io');
@@ -314,9 +379,12 @@ export const handleRazorpayWebhook = async (req, res) => {
                         io.emit(`ride:${ride.rideId}:payment_confirmed`, {
                             rideId: ride.rideId,
                             message: 'Payment confirmed via webhook',
-                            paymentId: paymentEntity.id
+                            paymentId: paymentEntity.id,
+                            method: paymentEntity.method
                         });
                     }
+                } else {
+                    console.log('❌ No ride found with orderId:', orderId);
                 }
                 break;
 
@@ -324,26 +392,40 @@ export const handleRazorpayWebhook = async (req, res) => {
                 const failedPayment = payload.payment.entity;
                 const failedOrderId = failedPayment.order_id;
                 
+                console.log('❌ Payment failed:', {
+                    orderId: failedOrderId,
+                    paymentId: failedPayment.id,
+                    error: failedPayment.error_description
+                });
+
                 const failedRide = await Ride.findOne({ paymentIntentId: failedOrderId });
                 if (failedRide) {
                     failedRide.paymentStatus = 'failed';
                     await failedRide.save();
+                    console.log('✅ Ride marked as failed');
 
                     await Payment.findOneAndUpdate(
                         { paymentId: failedOrderId },
-                        { status: 'failed' }
+                        { 
+                            status: 'failed',
+                            metadata: {
+                                error: failedPayment.error_description,
+                                errorCode: failedPayment.error_code,
+                                failedAt: new Date().toISOString()
+                            }
+                        }
                     );
                 }
                 break;
 
             default:
-                console.log('Unhandled webhook event:', event);
+                console.log('ℹ️ Unhandled webhook event:', event);
         }
 
         res.json({ success: true, received: true });
 
     } catch (error) {
-        console.error('Razorpay webhook error:', error);
+        console.error('❌ Razorpay webhook error:', error);
         res.status(500).json({ 
             success: false, 
             message: error.message || 'Webhook processing failed' 
@@ -352,7 +434,6 @@ export const handleRazorpayWebhook = async (req, res) => {
 };
 
 // ==================== REFUND PAYMENT ====================
-// Process refund for cancelled rides
 export const refundPayment = async (req, res) => {
     try {
         const { rideId, reason } = req.body;
@@ -396,8 +477,12 @@ export const refundPayment = async (req, res) => {
             }
         });
 
+        console.log('✅ Refund processed:', refund.id);
+
         // Update payment record
         payment.status = 'refunded';
+        payment.refundId = refund.id;
+        payment.refundedAt = new Date();
         await payment.save();
 
         // Update ride status
@@ -411,12 +496,13 @@ export const refundPayment = async (req, res) => {
                 refundId: refund.id,
                 amount: refund.amount / 100,
                 currency: refund.currency,
-                status: refund.status
+                status: refund.status,
+                paymentId: payment.transactionId
             }
         });
 
     } catch (error) {
-        console.error('Refund payment error:', error);
+        console.error('❌ Refund payment error:', error);
         res.status(500).json({
             success: false,
             message: error.message || 'Failed to process refund'
