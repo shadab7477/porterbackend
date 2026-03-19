@@ -144,7 +144,7 @@ const formatRelativeTime = (date) => {
   return `${Math.floor(diffInSeconds / 86400)} days ago`;
 };
 
-// Check if current time is peak hour
+// Check if current time is peak hour (keeping for compatibility but not used in fare)
 const isPeakHour = () => {
   const hour = new Date().getHours();
   return (hour >= 8 && hour <= 10) || (hour >= 17 && hour <= 20);
@@ -273,9 +273,9 @@ export const getDriverPendingRequests = async (req, res) => {
             }
           }
         })
-        .sort({ requestedAt: -1 })
-        .limit(20)
-        .lean();
+          .sort({ requestedAt: -1 })
+          .limit(20)
+          .lean();
 
         console.log('✅ $near found:', pendingRides.length, 'rides');
 
@@ -302,9 +302,9 @@ export const getDriverPendingRequests = async (req, res) => {
           status: 'searching',
           'driver.driverId': { $exists: false }
         })
-        .sort({ requestedAt: -1 })
-        .limit(50)
-        .lean();
+          .sort({ requestedAt: -1 })
+          .limit(50)
+          .lean();
 
         // Calculate distance manually and filter within 5km
         const ridesWithDistance = allRides
@@ -435,10 +435,7 @@ async function processRides(pendingRides, driver, driverId, driverLat, driverLon
           durationText: ride.routeInfo?.durationText || `${ride.duration} mins`,
           estimatedFare: ride.fare?.total || 0,
           fareBreakdown: {
-            baseFare: ride.fare?.baseFare || 0,
             distanceFare: ride.fare?.distanceFare || 0,
-            timeFare: ride.fare?.timeFare || 0,
-            tax: ride.fare?.tax || 0,
             total: ride.fare?.total || 0
           }
         },
@@ -497,7 +494,7 @@ async function processRides(pendingRides, driver, driverId, driverLat, driverLon
 
 // ==================== RIDE REQUEST FLOW FUNCTIONS ====================
 
-// 1. Customer requests a ride
+// 1. Customer requests a ride - UPDATED with simplified fare
 export const requestRide = async (req, res) => {
   try {
     const customerId = req.customerId;
@@ -542,7 +539,9 @@ export const requestRide = async (req, res) => {
 
     const distance = routeInfo.distance;
     const duration = routeInfo.duration;
-    const fare = Ride.calculateFare(distance, duration, vehicleType, isPeakHour());
+    
+    // UPDATED: Calculate fare using simplified method (no duration, no peak hour)
+    const fare = Ride.calculateFare(distance, vehicleType);
 
     const ride = new Ride({
       customer: {
@@ -573,11 +572,7 @@ export const requestRide = async (req, res) => {
         durationInTrafficText: routeInfo.durationInTrafficText
       },
       fare: {
-        baseFare: fare.baseFare,
         distanceFare: fare.distanceFare,
-        timeFare: fare.timeFare,
-        surgeMultiplier: fare.surgeMultiplier,
-        tax: fare.tax,
         total: fare.total,
         finalAmount: fare.finalAmount
       },
@@ -633,8 +628,6 @@ const findNearbyDrivers = async (ride, io, radius = 5) => {
 
     ride.status = 'searching';
     await ride.save();
-
-
 
     const nearbyDrivers = await Driver.aggregate([
       {
@@ -837,11 +830,15 @@ export const acceptRide = async (req, res) => {
     io.emit(`ride:${ride.rideId}:accepted`, {
       rideId: ride.rideId,
       driver: {
+        driverId: driver._id,
         name: driver.name,
+        phone: driver.phone,
         vehicleType: driver.vehicleType,
         vehicleNumber: driver.vehicleNumber,
         rating: driver.rating,
-        currentLocation: driver.currentLocation
+        currentLocation: driver.currentLocation,
+        lat: driverLat,
+        lng: driverLon
       },
       eta: etaInfo.duration,
       etaText: etaInfo.durationText,
@@ -871,6 +868,16 @@ export const acceptRide = async (req, res) => {
           customerId: ride.customer.customerId,
           name: ride.customer.name,
           phone: ride.customer.phone
+        },
+        driver: {
+          driverId: driver._id,
+          name: driver.name,
+          phone: driver.phone,
+          vehicleType: driver.vehicleType,
+          vehicleNumber: driver.vehicleNumber,
+          rating: driver.rating,
+          lat: driverLat,
+          lng: driverLon
         },
         pickupLocation: ride.pickupLocation,
         dropLocation: ride.dropLocation,
@@ -1746,7 +1753,6 @@ export const getDriverRideHistory = async (req, res) => {
   }
 };
 
-
 // Add this to your rideController.js
 export const updateDriverLocation = async (req, res) => {
   try {
@@ -1783,7 +1789,7 @@ export const updateDriverLocation = async (req, res) => {
 
     // Broadcast location update to all connected clients in nearby area
     const io = req.app.get('io');
-    
+
     // Emit to all drivers in the area (for other drivers to see)
     io.emit('driver:location_updated', {
       driverId: driver._id,
@@ -1890,7 +1896,7 @@ export const getNearbyDrivers = async (req, res) => {
         name: driver.name,
         vehicleType: driver.vehicleType,
         vehicleNumber: driver.vehicleNumber,
-           lat: driverLat,
+        lat: driverLat,
         lng: driverLon,
         rating: driver.rating,
         distance: driver.distance / 1000,
@@ -1922,7 +1928,7 @@ export const getNearbyDrivers = async (req, res) => {
   }
 };
 
-// 18. Calculate fare estimate
+// 18. Calculate fare estimate - UPDATED with simplified pricing
 export const calculateFareEstimate = async (req, res) => {
   try {
     const { pickupLat, pickupLon, dropLat, dropLon, vehicleType = 'car' } = req.query;
@@ -1942,7 +1948,8 @@ export const calculateFareEstimate = async (req, res) => {
       vehicleType
     );
 
-    const fare = Ride.calculateFare(routeInfo.distance, routeInfo.duration, vehicleType, isPeakHour());
+    // UPDATED: Calculate fare using simplified method (no duration, no peak hour)
+    const fare = Ride.calculateFare(routeInfo.distance, vehicleType);
 
     const nearbyDriversResult = await Driver.aggregate([
       {
@@ -1976,11 +1983,11 @@ export const calculateFareEstimate = async (req, res) => {
         durationInTraffic: routeInfo.durationInTraffic,
         durationInTrafficText: routeInfo.durationInTrafficText,
         fare: {
-          ...fare,
-          total: Math.round(fare.total)
+          distanceFare: fare.distanceFare,
+          total: fare.total,
+          breakdown: fare.breakdown
         },
         vehicleType,
-        isPeakHour: isPeakHour(),
         nearbyDrivers: nearbyDriversCount,
         estimatedArrival: Math.min(routeInfo.durationInTraffic, routeInfo.duration) + 5
       }

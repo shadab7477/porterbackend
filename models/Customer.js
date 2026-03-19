@@ -7,8 +7,8 @@ const customerSchema = new mongoose.Schema({
     trim: true
   },
   fcmToken: {
-  type: String,
-},
+    type: String,
+  },
   phone: {
     type: String,
     required: [true, 'Phone number is required'],
@@ -20,6 +20,10 @@ const customerSchema = new mongoose.Schema({
     type: String,
     trim: true,
     lowercase: true
+  },
+  walletBalance: {
+    type: Number,
+    default: 0
   },
   isBlocked: {
     type: Boolean,
@@ -42,15 +46,15 @@ const customerSchema = new mongoose.Schema({
   }
 });
 
-customerSchema.pre('save', function(next) {
+customerSchema.pre('save', function (next) {
   this.updatedAt = Date.now();
   next();
 });
 
-customerSchema.methods.generateAuthToken = function() {
+customerSchema.methods.generateAuthToken = function () {
   return jwt.sign(
-    { 
-      id: this._id, 
+    {
+      id: this._id,
       phone: this.phone,
       role: 'customer'
     },

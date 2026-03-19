@@ -18,7 +18,7 @@ router.post('/test', async (req, res) => {
 
     const result = await sendNotification(
         fcmToken,
-        title || 'Test Notification',
+        title || 'maza aagya bhaiiiiii',
         body || 'This is a test notification from your backend!',
         data || { type: 'test' }
     );

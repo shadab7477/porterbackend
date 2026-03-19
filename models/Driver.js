@@ -77,6 +77,10 @@ const driverSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  walletBalance: {
+    type: Number,
+    default: 0
+  },
   totalTrips: {
     type: Number,
     default: 0
@@ -107,7 +111,7 @@ driverSchema.index({ isOnline: 1 });
 driverSchema.index({ isAvailable: 1 });
 
 // Update the updatedAt timestamp on save
-driverSchema.pre('save', function(next) {
+driverSchema.pre('save', function (next) {
   this.updatedAt = Date.now();
   next();
 });

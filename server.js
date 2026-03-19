@@ -20,6 +20,7 @@ import { initializeSupportSockets } from './sockets/supportSocketHandler.js';
 import verificationRoutes from './routes/verificationRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
+import walletRoutes from './routes/walletRoutes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -66,6 +67,7 @@ app.use('/api/support', supportRoutes);
 app.use('/api/verification', verificationRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/wallet', walletRoutes);
 
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });

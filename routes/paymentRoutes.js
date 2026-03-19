@@ -1,12 +1,20 @@
 import express from 'express';
-import { createPaymentIntent, confirmPayment, getPaymentStatus } from '../controllers/paymentController.js';
+import {
+    createPaymentOrder,  // Changed from createPaymentIntent
+    verifyPayment,       // Changed from confirmPayment
+    getPaymentStatus,
+    handleRazorpayWebhook
+} from '../controllers/paymentController.js';
 import { customerAuthMiddleware } from '../middleware/customerAuthMiddleware.js';
 
 const router = express.Router();
 
+// Public webhook endpoint (no auth required)
+router.post('/webhook/razorpay', express.raw({ type: 'application/json' }), handleRazorpayWebhook);
+
 // All payment routes require customer authentication
-router.post('/create-intent', customerAuthMiddleware, createPaymentIntent);
-router.post('/confirm', customerAuthMiddleware, confirmPayment);
+router.post('/create-order', customerAuthMiddleware, createPaymentOrder);     // Changed from create-intent
+router.post('/verify', customerAuthMiddleware, verifyPayment);                 // Changed from confirm
 router.get('/:rideId/status', customerAuthMiddleware, getPaymentStatus);
 
 export default router;

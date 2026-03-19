@@ -82,13 +82,9 @@ const rideSchema = new mongoose.Schema({
     durationInTrafficText: String
   },
 
-  // Fare Details
+  // Fare Details - SIMPLIFIED: only distanceFare and total
   fare: {
-    baseFare: { type: Number, default: 50 },
     distanceFare: { type: Number, default: 0 },
-    timeFare: { type: Number, default: 0 },
-    surgeMultiplier: { type: Number, default: 1 },
-    tax: { type: Number, default: 0 },
     total: { type: Number, required: true },
     discount: { type: Number, default: 0 },
     finalAmount: { type: Number, required: true }
@@ -251,58 +247,41 @@ rideSchema.methods.updateStatus = function (status) {
   return this;
 };
 
-// Static method to calculate fare
-rideSchema.statics.calculateFare = function (distance, duration, vehicleType = 'car', isPeakHour = false) {
-  const baseFares = {
-    'bike': 30,
-    'auto': 40,
-    'car': 50,
-    'mini_truck': 80,
-    'truck': 120
-  };
-
+// SIMPLIFIED: Static method to calculate fare - ONLY per km rates, no base, no tax
+rideSchema.statics.calculateFare = function (distance, vehicleType = 'car') {
+  // Per kilometer rates only - as specified
   const perKmRates = {
-    'bike': 8,
-    'auto': 10,
-    'car': 12,
-    'mini_truck': 20,
-    'truck': 30
+    // 2 Wheelers
+    'bike': 15,        // Bike & Scooty
+    'scooty': 15,      // Alternative name for bike
+    
+    // 3 Wheelers
+    'auto': 35,        // Mini 3W
+    'mini_3w': 35,     // Mini 3W
+    'e_loader': 45,    // E Loader
+    
+    // 4 Wheelers
+    'car': 105,        // TATA Ace
+    'tata_ace': 105,   // TATA Ace
+    'mini_truck': 105, // Alternative for TATA Ace
+    'truck': 105       // Default for larger vehicles
   };
 
-  const perMinuteRates = {
-    'bike': 1,
-    'auto': 1.5,
-    'car': 2,
-    'mini_truck': 3,
-    'truck': 5
-  };
+  // Get rate per km, default to car rate if vehicle type not found
+  const ratePerKm = perKmRates[vehicleType] || perKmRates.car;
+  
+  // Calculate total fare: distance × rate per km
+  const totalFare = distance * ratePerKm;
 
-  const surgeMultiplier = isPeakHour ? 1.5 : 1;
-
-  const baseFare = baseFares[vehicleType] || baseFares.car;
-  const distanceFare = distance * (perKmRates[vehicleType] || perKmRates.car);
-  const timeFare = duration * (perMinuteRates[vehicleType] || perMinuteRates.car);
-
-  const subtotal = baseFare + distanceFare + timeFare;
-  const afterSurge = subtotal * surgeMultiplier;
-  const tax = afterSurge * 0.05;
-  const total = afterSurge + tax;
-
+  // Return simplified fare object
   return {
-    baseFare,
-    distanceFare,
-    timeFare,
-    surgeMultiplier,
-    tax,
-    total: Math.round(total),
-    finalAmount: Math.round(total),
+    distanceFare: Math.round(totalFare),
+    total: Math.round(totalFare),
+    finalAmount: Math.round(totalFare),
     breakdown: {
-      baseFare: `₹${baseFare}`,
-      distanceFare: `${distance.toFixed(1)}km × ₹${perKmRates[vehicleType]} = ₹${Math.round(distanceFare)}`,
-      timeFare: `${duration}min × ₹${perMinuteRates[vehicleType]} = ₹${Math.round(timeFare)}`,
-      surge: surgeMultiplier > 1 ? `${surgeMultiplier}x surge` : 'No surge',
-      tax: `5% GST = ₹${Math.round(tax)}`,
-      total: `₹${Math.round(total)}`
+      ratePerKm: `₹${ratePerKm}/km`,
+      distance: `${distance.toFixed(1)} km`,
+      total: `₹${Math.round(totalFare)}`
     }
   };
 };
