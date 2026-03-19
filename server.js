@@ -61,7 +61,7 @@ app.use('/api/driver', driverAuthRoutes);
 app.use('/api/rides', rideRoutes);
 
 const supportNamespace = initializeSupportSockets(io);
-
+app.use(express.static("build"));
 // Add support routes
 app.use('/api/support', supportRoutes);
 app.use('/api/verification', verificationRoutes);
