@@ -6,6 +6,7 @@ import Driver from '../models/Driver.js';
 export const toggleMyOnlineStatus = async (req, res) => {
   try {
     const driverId = req.driver.id;
+    const { latitude, longitude } = req.body; // Get location from request body
     
     const driver = await Driver.findById(driverId);
     
@@ -16,12 +17,54 @@ export const toggleMyOnlineStatus = async (req, res) => {
       });
     }
     
-    // Toggle the online status
-    driver.isOnline = !driver.isOnline;
-    driver.isAvailable = "true"; // Set availability same as online status
-    driver.lastActive = new Date();
-    driver.lastOnlineAt = driver.isOnline ? null : new Date();
+    // Check if driver is verified
+    if (!req.driver.isVerified) {
+      return res.status(403).json({
+        success: false,
+        message: 'Driver not verified. Please complete registration and wait for verification.'
+      });
+    }
     
+    // If going online, validate location is provided
+    const newOnlineStatus = !driver.isOnline;
+    
+    if (newOnlineStatus) {
+      // When going online, location is required
+      if (!latitude || !longitude) {
+        return res.status(400).json({
+          success: false,
+          message: 'Location (latitude and longitude) is required to go online'
+        });
+      }
+      
+      // Validate coordinates
+      if (typeof latitude !== 'number' || typeof longitude !== 'number' ||
+          latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid coordinates. Latitude must be between -90 and 90, longitude between -180 and 180'
+        });
+      }
+      
+      // Update current location when going online
+      driver.currentLocation = {
+        type: 'Point',
+        coordinates: [longitude, latitude] // GeoJSON format: [longitude, latitude]
+      };
+      
+      driver.isOnline = true;
+      driver.isAvailable = true;
+      driver.lastOnlineAt = new Date();
+    } else {
+      // Going offline - clear location or keep last known
+      driver.isOnline = false;
+      driver.isAvailable = false;
+      driver.lastOnlineAt = null;
+      // Optionally keep last known location or clear it
+      // driver.currentLocation.coordinates = [0, 0];
+    }
+    
+    driver.lastActive = new Date();
     await driver.save();
     
     // Emit socket event if needed
@@ -31,6 +74,7 @@ export const toggleMyOnlineStatus = async (req, res) => {
         driverId: driver._id,
         isOnline: driver.isOnline,
         isAvailable: driver.isAvailable,
+        location: driver.currentLocation,
         timestamp: new Date()
       });
     }
@@ -41,6 +85,7 @@ export const toggleMyOnlineStatus = async (req, res) => {
       data: {
         isOnline: driver.isOnline,
         isAvailable: driver.isAvailable,
+        currentLocation: driver.currentLocation,
         lastActive: driver.lastActive,
         lastOnlineAt: driver.lastOnlineAt
       }
@@ -52,7 +97,7 @@ export const toggleMyOnlineStatus = async (req, res) => {
       message: error.message || 'Failed to toggle online status' 
     });
   }
-};
+}
 
 // Get driver's own online status
 export const getMyOnlineStatus = async (req, res) => {
