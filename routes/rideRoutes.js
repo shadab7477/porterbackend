@@ -1,4 +1,5 @@
 import express from 'express';
+import Ride from '../models/Ride.js';
 import {
   requestRide,
   acceptRide,
@@ -22,6 +23,48 @@ import {
 import { authMiddleware } from '../middleware/authMiddleware.js';
 import { customerAuthMiddleware } from '../middleware/customerAuthMiddleware.js';
 import driverAuthMiddleware from '../middleware/driverAuthMiddleware.js';
+
+export const getAllRides = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, status, search } = req.query;
+    const query = {};
+    if (status) query.status = status;
+
+    if (search) {
+      query['$or'] = [
+        { rideId: { $regex: search, $options: 'i' } },
+        { 'customer.name': { $regex: search, $options: 'i' } },
+        { 'customer.phone': { $regex: search, $options: 'i' } },
+        { 'driver.name': { $regex: search, $options: 'i' } },
+        { 'driver.phone': { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const rides = await Ride.find(query)
+      .sort({ requestedAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit));
+
+    const total = await Ride.countDocuments(query);
+
+    res.json({
+      success: true,
+      data: rides,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Get all rides error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to get rides'
+    });
+  }
+};
 
 const router = express.Router();
 
@@ -51,5 +94,6 @@ router.post('/:rideId/rate-customer', driverAuthMiddleware, rateCustomer);
 
 // ==================== SHARED ROUTES ====================
 router.post('/:rideId/cancel', authMiddleware, cancelRide);
+router.get('/', authMiddleware, getAllRides);
 
 export default router;

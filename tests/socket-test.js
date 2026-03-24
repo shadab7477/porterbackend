@@ -13,7 +13,7 @@
 
 const { io } = require('socket.io-client');
 
-const API_URL = process.env.API_URL || 'http://localhost:5000';
+const API_URL = process.env.API_URL || 'https://godelivo.com';
 const colors = {
   reset: '\x1b[0m',
   bright: '\x1b[1m',
@@ -42,7 +42,7 @@ class SocketTester {
 
   async connectAdmin() {
     log('\n📊 Connecting to /admin namespace...', 'magenta');
-    
+
     return new Promise((resolve) => {
       const socket = io(`${API_URL}/admin`);
       this.sockets.admin = socket;
@@ -100,14 +100,14 @@ class SocketTester {
 
   async connectDriver(driverId = 'test-driver-001') {
     log(`\n🚗 Connecting to /drivers namespace (Driver: ${driverId})...`, 'magenta');
-    
+
     return new Promise((resolve) => {
       const socket = io(`${API_URL}/drivers`);
       this.sockets.driver = socket;
 
       socket.on('connect', () => {
         log('✅ Driver client connected', 'green');
-        
+
         // Join driver room
         socket.emit('driver:join', driverId);
         resolve();
@@ -141,14 +141,14 @@ class SocketTester {
 
   async connectBooking(bookingId = 'test-booking-001') {
     log(`\n📦 Connecting to /bookings namespace (Booking: ${bookingId})...`, 'magenta');
-    
+
     return new Promise((resolve) => {
       const socket = io(`${API_URL}/bookings`);
       this.sockets.booking = socket;
 
       socket.on('connect', () => {
         log('✅ Booking client connected', 'green');
-        
+
         // Join booking room
         socket.emit('booking:join', bookingId);
         resolve();
@@ -179,7 +179,7 @@ class SocketTester {
   // Simulate driver actions
   async simulateDriverLocationUpdate(driverId = 'test-driver-001') {
     log('\n📍 Simulating driver location update...', 'blue');
-    
+
     if (this.sockets.driver) {
       this.sockets.driver.emit('driver:location-update', {
         driverId,
@@ -191,7 +191,7 @@ class SocketTester {
 
   async simulateDriverAvailability(driverId = 'test-driver-001', isAvailable = true) {
     log(`\n🔄 Simulating driver availability update (isAvailable: ${isAvailable})...`, 'blue');
-    
+
     if (this.sockets.driver) {
       this.sockets.driver.emit('driver:availability-update', {
         driverId,
@@ -202,7 +202,7 @@ class SocketTester {
 
   async simulateAcceptBooking(driverId = 'test-driver-001', orderId = 'test-order-001') {
     log('\n✅ Simulating driver accepting booking...', 'blue');
-    
+
     if (this.sockets.driver) {
       this.sockets.driver.emit('driver:accept-booking', {
         driverId,
@@ -213,7 +213,7 @@ class SocketTester {
 
   async simulateBookingStatusUpdate(orderId = 'test-order-001', status = 'completed') {
     log(`\n📝 Simulating booking status update (status: ${status})...`, 'blue');
-    
+
     if (this.sockets.booking) {
       this.sockets.booking.emit('booking:status-update', {
         orderId,
