@@ -121,6 +121,7 @@ export const sendOTP = async (req, res) => {
 };
 
 // Verify OTP and generate token
+// Verify OTP and generate token
 export const verifyOTP = async (req, res) => {
   try {
     const { phone, otp } = req.body;
@@ -162,45 +163,139 @@ export const verifyOTP = async (req, res) => {
     otpRecord.isVerified = true;
     await otpRecord.save();
 
-    // Check if driver exists and is verified
+    // Check if driver has an application
     const existingApplication = await DriverApplication.findOne({ phone });
-    let isExistingDriver = false;
     let driverToken = null;
+    let isExistingDriver = false;
     let isVerified = false;
-    let driverId = null;
+    let requiresRegistration = false;
     let applicationStatus = null;
+    let statusMessage = '';
+    let driverId = null;
 
     if (existingApplication) {
       applicationStatus = existingApplication.verificationStatus;
+      isExistingDriver = true;
       
-      if (existingApplication.verificationStatus === 'verified') {
-        isExistingDriver = true;
-        isVerified = true;
-        
-        // Get or create driver entry
-        let driver = await Driver.findOne({ phone });
-        if (!driver) {
-          driver = new Driver({
-            driverId: existingApplication.driverId,
-            name: existingApplication.fullName,
-            phone: existingApplication.phone,
-            email: existingApplication.email,
-            applicationId: existingApplication._id,
-            vehicleType: existingApplication.vehicleType,
-            vehicleNumber: existingApplication.vehicleNumber,
-            isOnline: false,
-            lastActive: new Date()
-          });
-          await driver.save();
-        }
-        
-        driverId = driver._id;
-        driverToken = generateDriverToken(driver._id, phone, true);
+      // Handle different application statuses
+      switch(applicationStatus) {
+        case 'verified':
+          // Driver is fully verified and approved
+          isVerified = true;
+          requiresRegistration = false;
+          statusMessage = 'Driver verified. Login successful.';
+          
+          // Get or create driver entry
+          let driver = await Driver.findOne({ phone });
+          if (!driver) {
+            driver = new Driver({
+              driverId: existingApplication.driverId,
+              name: existingApplication.fullName,
+              phone: existingApplication.phone,
+              email: existingApplication.email,
+              applicationId: existingApplication._id,
+              vehicleType: existingApplication.vehicleType,
+              vehicleNumber: existingApplication.vehicleNumber,
+              isOnline: false,
+              lastActive: new Date()
+            });
+            await driver.save();
+          }
+          
+          driverId = driver._id;
+          driverToken = generateDriverToken(driver._id, phone, true);
+          break;
+          
+        case 'submitted':
+        case 'under_review':
+          // Application is pending review
+          isVerified = false;
+          requiresRegistration = false; // No need to register again
+          statusMessage = 'Your application is under review. Please wait for verification.';
+          
+          // Generate token for checking status (short-lived)
+          driverToken = jwt.sign(
+            { 
+              phone, 
+              type: 'driver_auth',
+              role: 'driver',
+              isVerified: false,
+              requiresRegistration: false,
+              applicationStatus: applicationStatus
+            },
+            process.env.JWT_SECRET,
+            { expiresIn: '24h' }
+          );
+          break;
+          
+        case 'rejected':
+          // Application was rejected
+          isVerified = false;
+          requiresRegistration = true; // Can register again
+          statusMessage = `Your application was rejected. Reason: ${existingApplication.rejectionReason || 'Not specified'}. Please submit a new application.`;
+          
+          // Generate registration token
+          driverToken = jwt.sign(
+            { 
+              phone, 
+              type: 'driver_auth',
+              role: 'driver',
+              isVerified: false,
+              requiresRegistration: true
+            },
+            process.env.JWT_SECRET,
+            { expiresIn: '24h' }
+          );
+          break;
+          
+        case 'partially_verified':
+          // Some documents verified, some pending
+          isVerified = false;
+          requiresRegistration = false;
+          statusMessage = 'Your application is partially verified. Some documents are still pending review.';
+          
+          // Generate token for checking status
+          driverToken = jwt.sign(
+            { 
+              phone, 
+              type: 'driver_auth',
+              role: 'driver',
+              isVerified: false,
+              requiresRegistration: false,
+              applicationStatus: applicationStatus
+            },
+            process.env.JWT_SECRET,
+            { expiresIn: '24h' }
+          );
+          break;
+          
+        default:
+          // Default case - treat as new registration
+          isVerified = false;
+          requiresRegistration = true;
+          statusMessage = 'No application found. Please complete registration.';
+          
+          driverToken = jwt.sign(
+            { 
+              phone, 
+              type: 'driver_auth',
+              role: 'driver',
+              isVerified: false,
+              requiresRegistration: true
+            },
+            process.env.JWT_SECRET,
+            { expiresIn: '24h' }
+          );
       }
-    }
-
-    // If driver is not verified, generate registration token
-    if (!driverToken) {
+    } else {
+      // No application exists - new driver
+      isExistingDriver = false;
+      isVerified = false;
+      requiresRegistration = true;
+      applicationStatus = null;
+      statusMessage = 'New driver. Please complete registration.';
+      
+      // Generate registration token
       driverToken = jwt.sign(
         { 
           phone, 
@@ -217,18 +312,41 @@ export const verifyOTP = async (req, res) => {
     // Delete OTP after successful verification
     await OTP.deleteOne({ _id: otpRecord._id });
 
+    // Prepare response data
+    const responseData = {
+      token: driverToken,
+      phone,
+      isExistingDriver,
+      isVerified,
+      requiresRegistration,
+      applicationStatus,
+      statusMessage
+    };
+
+    // Add driverId only if it exists
+    if (driverId) {
+      responseData.driverId = driverId;
+    }
+
+    // Add document status if available and application exists
+    if (existingApplication && applicationStatus !== 'verified') {
+      const documentStatus = {
+        profilePhoto: existingApplication.profilePhoto?.verification?.status || 'not_uploaded',
+        aadharFront: existingApplication.aadharCard?.front?.verification?.status || 'not_uploaded',
+        aadharBack: existingApplication.aadharCard?.back?.verification?.status || 'not_uploaded',
+        panCard: existingApplication.panCard?.verification?.status || 'not_uploaded',
+        drivingLicense: existingApplication.drivingLicense?.verification?.status || 'not_uploaded',
+        vehicleRC: existingApplication.vehicleRC?.verification?.status || 'not_uploaded',
+        vehiclePhoto: existingApplication.vehiclePhoto?.verification?.status || 'not_uploaded',
+        bankDetails: existingApplication.bankDetails?.verification?.status || 'not_provided'
+      };
+      responseData.documentStatus = documentStatus;
+    }
+
     res.status(200).json({
       success: true,
-      message: 'OTP verified successfully',
-      data: {
-        token: driverToken,
-        phone,
-        isExistingDriver,
-        isVerified,
-        requiresRegistration: !isExistingDriver,
-        applicationStatus,
-        driverId
-      }
+      message: statusMessage,
+      data: responseData
     });
     
   } catch (error) {
