@@ -6,7 +6,9 @@ import {
   getApplicationStatus,
   getDriverProfile,
   verifyDocument,
-  driverLogin
+  driverLogin,
+  driverLogout,
+  refreshToken
 } from '../controllers/driverAuthController.js';
 import { 
   toggleMyOnlineStatus, 
@@ -16,6 +18,7 @@ import {
 } from '../controllers/driverController.js';
 import uploadMiddleware from '../middleware/uploadMiddleware.js';
 import driverAuthMiddleware from '../middleware/driverAuthMiddleware.js';
+import adminAuth from '../middleware/adminAuth.js';
 
 const router = express.Router();
 
@@ -26,20 +29,19 @@ const router = express.Router();
 router.post('/send-otp', sendOTP);
 router.post('/verify-otp', verifyOTP);
 
-// Check application status
+// Check application status (public)
 router.get('/status/:phone', getApplicationStatus);
 
-// Driver login (after approval)
+// Driver login (explicit login for verified drivers)
 router.post('/login', driverLogin);
 
 
 // ==================== REGISTRATION ROUTES ====================
-// Require temporary token from OTP verification
+// Require token from OTP verification
 
-// Complete registration with documents
 router.post(
   '/register',
-  driverAuthMiddleware, // Verifies temp token
+  driverAuthMiddleware,
   uploadMiddleware.fields([
     { name: 'profilePhoto', maxCount: 1 },
     { name: 'aadharFront', maxCount: 1 },
@@ -54,25 +56,29 @@ router.post(
 
 
 // ==================== AUTHENTICATED DRIVER ROUTES ====================
-// Require valid driver authentication token (after approval)
+// Require valid driver authentication token
 
-// Get driver profile
+// Auth management
+router.post('/logout', driverAuthMiddleware, driverLogout);
+router.post('/refresh-token', driverAuthMiddleware, refreshToken);
+
+// Profile
 router.get('/profile', driverAuthMiddleware, getDriverProfile);
 
-// Online status management
+// Online status
 router.post('/toggle-online', driverAuthMiddleware, toggleMyOnlineStatus);
 router.get('/online-status', driverAuthMiddleware, getMyOnlineStatus);
 
-// Location updates
+// Location
 router.post('/location', driverAuthMiddleware, updateLocation);
 
-// Driver stats
+// Stats
 router.get('/stats', driverAuthMiddleware, getDriverStats);
 
 
 // ==================== ADMIN ROUTES ====================
-// Should be protected with admin middleware
+// Protected with admin middleware
 
-router.post('/verify-document', verifyDocument);
+router.post('/verify-document', adminAuth, verifyDocument);
 
 export default router;

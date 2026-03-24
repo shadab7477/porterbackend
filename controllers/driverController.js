@@ -18,7 +18,7 @@ export const toggleMyOnlineStatus = async (req, res) => {
     
     // Toggle the online status
     driver.isOnline = !driver.isOnline;
-    driver.isAvailable = driver.isOnline; // Set availability same as online status
+    driver.isAvailable = "true"; // Set availability same as online status
     driver.lastActive = new Date();
     driver.lastOnlineAt = driver.isOnline ? null : new Date();
     

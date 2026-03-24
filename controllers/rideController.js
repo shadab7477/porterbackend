@@ -1352,13 +1352,15 @@ export const trackRide = async (req, res) => {
   try {
     const customerId = req.customerId;
     const { rideId } = req.params;
-
+console.log(rideId);
     const ride = await Ride.findOne({
       rideId,
       'customer.customerId': customerId,
       status: { $in: ['driver_assigned', 'driver_arrived', 'in_progress'] }
     }).populate('driver.driverId');
 
+console.log(ride);
+    
     if (!ride) {
       return res.status(404).json({
         success: false,

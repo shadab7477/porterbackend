@@ -13,7 +13,6 @@ export const customerAuthMiddleware = async (req, res, next) => {
     }
 
     const token = authHeader.split(' ')[1];
-console.log(token);
 
     if (!token) {
       return res.status(401).json({
@@ -27,7 +26,6 @@ console.log(token);
 
     // Check if customer exists
     const customer = await Customer.findById(decoded.id);
-console.log(customer);
 
     if (!customer) {
       return res.status(401).json({

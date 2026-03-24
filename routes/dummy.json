@@ -18,7 +18,18 @@
   }
 }
 
+,
 
+
+{
+    "success": true,
+    "message": "OTP verified successfully",
+    "data": {
+        "tempToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwaG9uZSI6IjgzNDkxMzU2NjEiLCJ0eXBlIjoiZHJpdmVyX3JlZ2lzdHJhdGlvbiIsImlhdCI6MTc3NDAwNjgwNCwiZXhwIjoxNzc0MDkzMjA0fQ.CXLjJqBP9eSI2a6j3qa4GBu5BUpXETqQrQ3eQwrLjOc",
+        "phone": "8349135661",
+        "isExistingDriver": false
+    }
+}
 
 
 

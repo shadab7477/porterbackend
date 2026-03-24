@@ -5,34 +5,26 @@ import OTP from '../models/OTP.js';
 import { uploadToCloudinary } from '../config/cloudinary.js';
 import { generateOTP, sendSmsOtp } from '../utils/smsService.js';
 
-// Generate temporary token for registration
-const generateTempToken = (phone) => {
-  return jwt.sign(
-    { phone, type: 'driver_registration' },
-    process.env.JWT_SECRET,
-    { expiresIn: '24h' }
-  );
-};
-
 // Generate driver auth token (long-lived token for authenticated drivers)
-const generateDriverToken = (driverId, phone) => {
+const generateDriverToken = (driverId, phone, isVerified = false) => {
   return jwt.sign(
     { 
       id: driverId,
       phone, 
       type: 'driver_auth',
-      role: 'driver'
+      role: 'driver',
+      isVerified
     },
     process.env.JWT_SECRET,
-    { expiresIn: '30d' } // 30 days expiry for driver sessions
+    { expiresIn: '30d' }
   );
 };
 
-// Verify temporary token
-const verifyTempToken = (token) => {
+// Verify driver token
+const verifyDriverToken = (token) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    if (decoded.type !== 'driver_registration') {
+    if (decoded.type !== 'driver_auth') {
       throw new Error('Invalid token type');
     }
     return decoded;
@@ -44,7 +36,7 @@ const verifyTempToken = (token) => {
 // File validation helper
 const validateFile = (file) => {
   const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-  const maxSize = 5 * 1024 * 1024; // 5MB
+  const maxSize = 5 * 1024 * 1024;
   
   if (!allowedMimeTypes.includes(file.mimetype)) {
     return {
@@ -63,15 +55,22 @@ const validateFile = (file) => {
   return { valid: true };
 };
 
-// Helper to check if driver exists and is approved
-const checkIfDriverExists = async (phone) => {
-  const driver = await Driver.findOne({ phone });
-  const application = await DriverApplication.findOne({ 
-    phone, 
-    verificationStatus: 'verified' 
-  });
-  return !!(driver && application);
+// Helper to check driver verification status
+const checkDriverVerification = async (driverId) => {
+  const driver = await Driver.findById(driverId).populate('applicationId');
+  if (!driver) {
+    throw new Error('Driver not found');
+  }
+  
+  const application = driver.applicationId;
+  if (!application || application.verificationStatus !== 'verified') {
+    throw new Error('Driver not verified. Please complete registration and wait for verification.');
+  }
+  
+  return { driver, application };
 };
+
+// ==================== PUBLIC ROUTES ====================
 
 // Send OTP
 export const sendOTP = async (req, res) => {
@@ -93,20 +92,15 @@ export const sendOTP = async (req, res) => {
       });
     }
 
-    // Delete any existing OTP for this phone
     await OTP.deleteMany({ mobile: phone });
 
-    // Generate OTP
     const otp = generateOTP();
-
-    // Save OTP to database
     const otpRecord = new OTP({
       mobile: phone,
       otp: otp
     });
     await otpRecord.save();
 
-    // Send SMS
     await sendSmsOtp(phone, otp);
 
     res.status(200).json({
@@ -126,7 +120,7 @@ export const sendOTP = async (req, res) => {
   }
 };
 
-// Verify OTP
+// Verify OTP and generate token
 export const verifyOTP = async (req, res) => {
   try {
     const { phone, otp } = req.body;
@@ -168,21 +162,75 @@ export const verifyOTP = async (req, res) => {
     otpRecord.isVerified = true;
     await otpRecord.save();
 
-    // Generate temporary token for registration
-    const tempToken = generateTempToken(phone);
-    
-    // Check if user is already an approved driver
-    const isExistingDriver = await checkIfDriverExists(phone);
+    // Check if driver exists and is verified
+    const existingApplication = await DriverApplication.findOne({ phone });
+    let isExistingDriver = false;
+    let driverToken = null;
+    let isVerified = false;
+    let driverId = null;
+    let applicationStatus = null;
+
+    if (existingApplication) {
+      applicationStatus = existingApplication.verificationStatus;
+      
+      if (existingApplication.verificationStatus === 'verified') {
+        isExistingDriver = true;
+        isVerified = true;
+        
+        // Get or create driver entry
+        let driver = await Driver.findOne({ phone });
+        if (!driver) {
+          driver = new Driver({
+            driverId: existingApplication.driverId,
+            name: existingApplication.fullName,
+            phone: existingApplication.phone,
+            email: existingApplication.email,
+            applicationId: existingApplication._id,
+            vehicleType: existingApplication.vehicleType,
+            vehicleNumber: existingApplication.vehicleNumber,
+            isOnline: false,
+            lastActive: new Date()
+          });
+          await driver.save();
+        }
+        
+        driverId = driver._id;
+        driverToken = generateDriverToken(driver._id, phone, true);
+      }
+    }
+
+    // If driver is not verified, generate registration token
+    if (!driverToken) {
+      driverToken = jwt.sign(
+        { 
+          phone, 
+          type: 'driver_auth',
+          role: 'driver',
+          isVerified: false,
+          requiresRegistration: true
+        },
+        process.env.JWT_SECRET,
+        { expiresIn: '24h' }
+      );
+    }
+
+    // Delete OTP after successful verification
+    await OTP.deleteOne({ _id: otpRecord._id });
 
     res.status(200).json({
       success: true,
       message: 'OTP verified successfully',
       data: {
-        tempToken,
+        token: driverToken,
         phone,
-        isExistingDriver
+        isExistingDriver,
+        isVerified,
+        requiresRegistration: !isExistingDriver,
+        applicationStatus,
+        driverId
       }
     });
+    
   } catch (error) {
     console.error('Error in verifyOTP:', error);
     res.status(500).json({
@@ -192,7 +240,7 @@ export const verifyOTP = async (req, res) => {
   }
 };
 
-// Driver Login
+// Driver Login (explicit login for verified drivers)
 export const driverLogin = async (req, res) => {
   try {
     const { phone } = req.body;
@@ -204,10 +252,9 @@ export const driverLogin = async (req, res) => {
       });
     }
 
-    // Find driver application that is approved
     const application = await DriverApplication.findOne({ 
       phone,
-      verificationStatus: 'verified' // Only approved drivers can login
+      verificationStatus: 'verified'
     });
 
     if (!application) {
@@ -217,13 +264,11 @@ export const driverLogin = async (req, res) => {
       });
     }
 
-    // Check if driver exists in drivers collection
-    let driver = await Driver.findOne({ phone });
+    let driver = await Driver.findOne({ phone }).populate('applicationId');
 
     if (!driver) {
-      // Create driver entry from approved application
       driver = new Driver({
-        driverId: application.driverId || 'DRV' + Date.now().toString().slice(-8),
+        driverId: application.driverId,
         name: application.fullName,
         phone: application.phone,
         email: application.email,
@@ -235,13 +280,11 @@ export const driverLogin = async (req, res) => {
       });
       await driver.save();
     } else {
-      // Update existing driver's last active time
       driver.lastActive = new Date();
       await driver.save();
     }
 
-    // Generate driver token
-    const driverToken = generateDriverToken(driver._id, phone);
+    const driverToken = generateDriverToken(driver._id, phone, true);
 
     res.status(200).json({
       success: true,
@@ -258,6 +301,10 @@ export const driverLogin = async (req, res) => {
           isAvailable: driver.isAvailable,
           vehicleType: driver.vehicleType,
           vehicleNumber: driver.vehicleNumber,
+          rating: driver.rating,
+          totalTrips: driver.totalTrips,
+          totalEarnings: driver.totalEarnings,
+          walletBalance: driver.walletBalance,
           applicationStatus: application.verificationStatus
         }
       }
@@ -271,6 +318,67 @@ export const driverLogin = async (req, res) => {
     });
   }
 };
+
+// Driver Logout
+export const driverLogout = async (req, res) => {
+  try {
+    const driverId = req.driver.id;
+
+    await Driver.findByIdAndUpdate(driverId, {
+      isOnline: false,
+      lastActive: new Date(),
+      socketId: null,
+      fcmToken: null
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Logged out successfully'
+    });
+  } catch (error) {
+    console.error('Error in driverLogout:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Logout failed'
+    });
+  }
+};
+
+// Refresh Token
+export const refreshToken = async (req, res) => {
+  try {
+    const driverId = req.driver.id;
+    const phone = req.driver.phone;
+
+    const driver = await Driver.findById(driverId);
+    if (!driver) {
+      return res.status(401).json({
+        success: false,
+        message: 'Driver not found'
+      });
+    }
+
+    const application = await DriverApplication.findOne({ phone: driver.phone });
+    const isVerified = application?.verificationStatus === 'verified';
+
+    const newToken = generateDriverToken(driverId, phone, isVerified);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        token: newToken
+      }
+    });
+  } catch (error) {
+    console.error('Error in refreshToken:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to refresh token'
+    });
+  }
+};
+
+// ==================== REGISTRATION ROUTES ====================
 
 // Complete Registration
 export const completeRegistration = async (req, res) => {
@@ -286,266 +394,261 @@ export const completeRegistration = async (req, res) => {
 
     const token = authHeader.split(' ')[1];
     
-    const decoded = verifyTempToken(token);
-    const phone = decoded.phone;
-
-    // Get all form data
-    const {
-      fullName,
-      email,
-      dateOfBirth,
-      address,
-      vehicleType,
-      vehicleNumber,
-      vehicleModel,
-      vehicleYear,
-      vehicleColor,
-      accountHolderName,
-      accountNumber,
-      ifscCode,
-      bankName,
-      branchName,
-      aadharNumber,
-      licenseNumber,
-      rcNumber,
-      licenseExpiryDate
-    } = req.body;
-
-    // Validate required fields
-    if (!fullName) {
-      return res.status(400).json({
-        success: false,
-        message: 'Full name is required'
-      });
-    }
-
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email is required'
-      });
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid email format'
-      });
-    }
-
-    if (!dateOfBirth) {
-      return res.status(400).json({
-        success: false,
-        message: 'Date of birth is required'
-      });
-    }
-
-    // Parse address
-    let parsedAddress = {};
     try {
-      parsedAddress = JSON.parse(address);
-    } catch (e) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid address format'
-      });
-    }
-
-    // Check if all required files are uploaded
-    const requiredFiles = [
-      'profilePhoto', 
-      'aadharFront',
-      'aadharBack',
-      'panCard', 
-      'drivingLicense', 
-      'vehicleRC', 
-      'vehiclePhoto'
-    ];
-    
-    const uploadedFiles = req.files || {};
-    const missingFiles = requiredFiles.filter(file => !uploadedFiles[file] || uploadedFiles[file].length === 0);
-
-    if (missingFiles.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: `Missing required documents: ${missingFiles.join(', ')}`
-      });
-    }
-
-    // Check if application already exists
-    let application = await DriverApplication.findOne({ phone });
-
-    if (application) {
-      // Update existing application
-      application.fullName = fullName;
-      application.email = email;
-      application.dateOfBirth = new Date(dateOfBirth);
-      application.address = parsedAddress;
-      application.vehicleType = vehicleType;
-      application.vehicleNumber = vehicleNumber?.toUpperCase();
-      application.vehicleModel = vehicleModel;
-      application.vehicleYear = vehicleYear ? parseInt(vehicleYear) : undefined;
-      application.vehicleColor = vehicleColor;
+      const decoded = verifyDriverToken(token);
+      const phone = decoded.phone;
       
-      if (accountHolderName && accountNumber && ifscCode && bankName) {
-        application.bankDetails = {
-          accountHolderName,
-          accountNumber,
-          ifscCode: ifscCode?.toUpperCase(),
-          bankName,
-          branchName: branchName || '',
-          verification: { status: 'pending' }
-        };
+      if (decoded.isVerified) {
+        return res.status(400).json({
+          success: false,
+          message: 'Driver is already verified. Cannot register again.'
+        });
       }
-    } else {
-      // Generate unique driver ID
-      const driverId = 'DRV' + Date.now().toString().slice(-8) + Math.floor(Math.random() * 1000);
       
-      // Create new application
-      application = new DriverApplication({
-        driverId,
-        phone,
+      const {
         fullName,
         email,
-        dateOfBirth: new Date(dateOfBirth),
-        address: parsedAddress,
+        dateOfBirth,
+        address,
         vehicleType,
-        vehicleNumber: vehicleNumber?.toUpperCase(),
+        vehicleNumber,
         vehicleModel,
-        vehicleYear: vehicleYear ? parseInt(vehicleYear) : undefined,
+        vehicleYear,
         vehicleColor,
-        bankDetails: accountHolderName && accountNumber && ifscCode && bankName ? {
-          accountHolderName,
-          accountNumber,
-          ifscCode: ifscCode?.toUpperCase(),
-          bankName,
-          branchName: branchName || '',
+        accountHolderName,
+        accountNumber,
+        ifscCode,
+        bankName,
+        branchName,
+        aadharNumber,
+        licenseNumber,
+        rcNumber,
+        licenseExpiryDate
+      } = req.body;
+
+      // Validation
+      if (!fullName) {
+        return res.status(400).json({
+          success: false,
+          message: 'Full name is required'
+        });
+      }
+
+      if (!email) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email is required'
+        });
+      }
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid email format'
+        });
+      }
+
+      if (!dateOfBirth) {
+        return res.status(400).json({
+          success: false,
+          message: 'Date of birth is required'
+        });
+      }
+
+      let parsedAddress = {};
+      try {
+        parsedAddress = JSON.parse(address);
+      } catch (e) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid address format'
+        });
+      }
+
+      const requiredFiles = [
+        'profilePhoto', 
+        'aadharFront',
+        'aadharBack',
+        'panCard', 
+        'drivingLicense', 
+        'vehicleRC', 
+        'vehiclePhoto'
+      ];
+      
+      const uploadedFiles = req.files || {};
+      const missingFiles = requiredFiles.filter(file => !uploadedFiles[file] || uploadedFiles[file].length === 0);
+
+      if (missingFiles.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Missing required documents: ${missingFiles.join(', ')}`
+        });
+      }
+
+      let application = await DriverApplication.findOne({ phone });
+
+      if (application) {
+        application.fullName = fullName;
+        application.email = email;
+        application.dateOfBirth = new Date(dateOfBirth);
+        application.address = parsedAddress;
+        application.vehicleType = vehicleType;
+        application.vehicleNumber = vehicleNumber?.toUpperCase();
+        application.vehicleModel = vehicleModel;
+        application.vehicleYear = vehicleYear ? parseInt(vehicleYear) : undefined;
+        application.vehicleColor = vehicleColor;
+        
+        if (accountHolderName && accountNumber && ifscCode && bankName) {
+          application.bankDetails = {
+            accountHolderName,
+            accountNumber,
+            ifscCode: ifscCode?.toUpperCase(),
+            bankName,
+            branchName: branchName || '',
+            verification: { status: 'pending' }
+          };
+        }
+      } else {
+        const driverId = 'DRV' + Date.now().toString().slice(-8) + Math.floor(Math.random() * 1000);
+        
+        application = new DriverApplication({
+          driverId,
+          phone,
+          fullName,
+          email,
+          dateOfBirth: new Date(dateOfBirth),
+          address: parsedAddress,
+          vehicleType,
+          vehicleNumber: vehicleNumber?.toUpperCase(),
+          vehicleModel,
+          vehicleYear: vehicleYear ? parseInt(vehicleYear) : undefined,
+          vehicleColor,
+          bankDetails: accountHolderName && accountNumber && ifscCode && bankName ? {
+            accountHolderName,
+            accountNumber,
+            ifscCode: ifscCode?.toUpperCase(),
+            bankName,
+            branchName: branchName || '',
+            verification: { status: 'pending' }
+          } : undefined
+        });
+      }
+
+      const folder = `driver-documents/${phone}`;
+      
+      const uploadFile = async (fileArray, docType) => {
+        if (!fileArray || fileArray.length === 0) return null;
+        
+        const file = fileArray[0];
+        const validation = validateFile(file);
+        if (!validation.valid) {
+          throw new Error(`${docType}: ${validation.message}`);
+        }
+
+        const result = await uploadToCloudinary(file.buffer, folder);
+        
+        return {
+          url: result.url,
+          publicId: result.publicId,
+          uploadedAt: new Date(),
           verification: { status: 'pending' }
-        } : undefined
-      });
-    }
-
-    // Upload all documents to Cloudinary
-    const folder = `driver-documents/${phone}`;
-    
-    // Helper function to upload file
-    const uploadFile = async (fileArray, docType) => {
-      if (!fileArray || fileArray.length === 0) return null;
-      
-      const file = fileArray[0];
-      
-      // Validate file
-      const validation = validateFile(file);
-      if (!validation.valid) {
-        throw new Error(`${docType}: ${validation.message}`);
-      }
-
-      const result = await uploadToCloudinary(file.buffer, folder);
-      
-      return {
-        url: result.url,
-        publicId: result.publicId,
-        uploadedAt: new Date(),
-        verification: { status: 'pending' }
+        };
       };
-    };
 
-    try {
-      // Upload profile photo
-      if (req.files.profilePhoto) {
-        application.profilePhoto = await uploadFile(req.files.profilePhoto, 'profilePhoto');
-      }
-      
-      // Upload aadhar front
-      if (req.files.aadharFront) {
-        const aadharFrontDoc = await uploadFile(req.files.aadharFront, 'aadharFront');
-        if (!application.aadharCard) {
-          application.aadharCard = {};
+      try {
+        if (req.files.profilePhoto) {
+          application.profilePhoto = await uploadFile(req.files.profilePhoto, 'profilePhoto');
         }
-        application.aadharCard.front = aadharFrontDoc;
-      }
-      
-      // Upload aadhar back
-      if (req.files.aadharBack) {
-        const aadharBackDoc = await uploadFile(req.files.aadharBack, 'aadharBack');
-        if (!application.aadharCard) {
-          application.aadharCard = {};
+        
+        if (req.files.aadharFront) {
+          const aadharFrontDoc = await uploadFile(req.files.aadharFront, 'aadharFront');
+          if (!application.aadharCard) {
+            application.aadharCard = {};
+          }
+          application.aadharCard.front = aadharFrontDoc;
         }
-        application.aadharCard.back = aadharBackDoc;
+        
+        if (req.files.aadharBack) {
+          const aadharBackDoc = await uploadFile(req.files.aadharBack, 'aadharBack');
+          if (!application.aadharCard) {
+            application.aadharCard = {};
+          }
+          application.aadharCard.back = aadharBackDoc;
+        }
+        
+        if (aadharNumber && application.aadharCard) {
+          application.aadharCard.aadharNumber = aadharNumber;
+        }
+        
+        if (req.files.panCard) {
+          application.panCard = await uploadFile(req.files.panCard, 'panCard');
+        }
+        
+        if (req.files.drivingLicense) {
+          const licenseDoc = await uploadFile(req.files.drivingLicense, 'drivingLicense');
+          application.drivingLicense = {
+            ...licenseDoc,
+            licenseNumber: licenseNumber || '',
+            expiryDate: licenseExpiryDate ? new Date(licenseExpiryDate) : undefined
+          };
+        }
+        
+        if (req.files.vehicleRC) {
+          const rcDoc = await uploadFile(req.files.vehicleRC, 'vehicleRC');
+          application.vehicleRC = {
+            ...rcDoc,
+            rcNumber: rcNumber || ''
+          };
+        }
+        
+        if (req.files.vehiclePhoto) {
+          application.vehiclePhoto = await uploadFile(req.files.vehiclePhoto, 'vehiclePhoto');
+        }
+      } catch (uploadError) {
+        return res.status(400).json({
+          success: false,
+          message: uploadError.message
+        });
       }
-      
-      // Set aadhar number if provided
-      if (aadharNumber && application.aadharCard) {
-        application.aadharCard.aadharNumber = aadharNumber;
-      }
-      
-      // Upload pan card
-      if (req.files.panCard) {
-        application.panCard = await uploadFile(req.files.panCard, 'panCard');
-      }
-      
-      // Upload driving license
-      if (req.files.drivingLicense) {
-        const licenseDoc = await uploadFile(req.files.drivingLicense, 'drivingLicense');
-        application.drivingLicense = {
-          ...licenseDoc,
-          licenseNumber: licenseNumber || '',
-          expiryDate: licenseExpiryDate ? new Date(licenseExpiryDate) : undefined
-        };
-      }
-      
-      // Upload vehicle RC
-      if (req.files.vehicleRC) {
-        const rcDoc = await uploadFile(req.files.vehicleRC, 'vehicleRC');
-        application.vehicleRC = {
-          ...rcDoc,
-          rcNumber: rcNumber || ''
-        };
-      }
-      
-      // Upload vehicle photo
-      if (req.files.vehiclePhoto) {
-        application.vehiclePhoto = await uploadFile(req.files.vehiclePhoto, 'vehiclePhoto');
-      }
-    } catch (uploadError) {
-      return res.status(400).json({
-        success: false,
-        message: uploadError.message
+
+      application.verificationStatus = 'submitted';
+      application.submittedAt = new Date();
+      await application.save();
+
+      const documentStatus = {
+        profilePhoto: application.profilePhoto?.verification?.status || 'pending',
+        aadharFront: application.aadharCard?.front?.verification?.status || 'pending',
+        aadharBack: application.aadharCard?.back?.verification?.status || 'pending',
+        panCard: application.panCard?.verification?.status || 'pending',
+        drivingLicense: application.drivingLicense?.verification?.status || 'pending',
+        vehicleRC: application.vehicleRC?.verification?.status || 'pending',
+        vehiclePhoto: application.vehiclePhoto?.verification?.status || 'pending',
+        bankDetails: application.bankDetails?.verification?.status || 'pending'
+      };
+
+      res.status(200).json({
+        success: true,
+        message: 'Registration completed successfully! Your application is under review.',
+        data: {
+          applicationId: application._id,
+          driverId: application.driverId,
+          fullName: application.fullName,
+          phone: application.phone,
+          verificationStatus: application.verificationStatus,
+          documentStatus,
+          submittedAt: application.submittedAt
+        }
       });
-    }
-
-    // Set status to submitted
-    application.verificationStatus = 'submitted';
-    application.submittedAt = new Date();
-
-    await application.save();
-
-    // Calculate individual document statuses for response
-    const documentStatus = {
-      profilePhoto: application.profilePhoto?.verification?.status || 'pending',
-      aadharFront: application.aadharCard?.front?.verification?.status || 'pending',
-      aadharBack: application.aadharCard?.back?.verification?.status || 'pending',
-      panCard: application.panCard?.verification?.status || 'pending',
-      drivingLicense: application.drivingLicense?.verification?.status || 'pending',
-      vehicleRC: application.vehicleRC?.verification?.status || 'pending',
-      vehiclePhoto: application.vehiclePhoto?.verification?.status || 'pending',
-      bankDetails: application.bankDetails?.verification?.status || 'pending'
-    };
-
-    res.status(200).json({
-      success: true,
-      message: 'Registration completed successfully! Your application is under review.',
-      data: {
-        applicationId: application._id,
-        driverId: application.driverId,
-        fullName: application.fullName,
-        phone: application.phone,
-        verificationStatus: application.verificationStatus,
-        documentStatus,
-        submittedAt: application.submittedAt
+    } catch (error) {
+      if (error.name === 'JsonWebTokenError') {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid token. Please verify OTP again.'
+        });
       }
-    });
+      throw error;
+    }
 
   } catch (error) {
     console.error('Error in completeRegistration:', error);
@@ -583,7 +686,6 @@ export const getApplicationStatus = async (req, res) => {
       });
     }
 
-    // Get individual document statuses
     const documentStatus = {
       profilePhoto: application.profilePhoto?.verification?.status || 'not_uploaded',
       aadharFront: application.aadharCard?.front?.verification?.status || 'not_uploaded',
@@ -615,24 +717,12 @@ export const getApplicationStatus = async (req, res) => {
   }
 };
 
-// Get Driver Profile (for authenticated drivers)
+// Get Driver Profile
 export const getDriverProfile = async (req, res) => {
   try {
     const driverId = req.driver.id;
+    const { driver, application } = await checkDriverVerification(driverId);
 
-    const driver = await Driver.findById(driverId)
-      .populate('applicationId');
-
-    if (!driver) {
-      return res.status(404).json({
-        success: false,
-        message: 'Driver not found'
-      });
-    }
-
-    const application = driver.applicationId;
-
-    // Prepare profile data
     const profileData = {
       id: driver._id,
       driverId: driver.driverId,
@@ -647,7 +737,8 @@ export const getDriverProfile = async (req, res) => {
       stats: {
         totalEarnings: driver.totalEarnings,
         totalTrips: driver.totalTrips,
-        rating: driver.rating
+        rating: driver.rating,
+        walletBalance: driver.walletBalance
       },
       applicationDetails: application ? {
         dateOfBirth: application.dateOfBirth,
@@ -675,6 +766,12 @@ export const getDriverProfile = async (req, res) => {
     });
   } catch (error) {
     console.error('Error in getDriverProfile:', error);
+    if (error.message === 'Driver not found' || error.message === 'Driver not verified. Please complete registration and wait for verification.') {
+      return res.status(403).json({
+        success: false,
+        message: error.message
+      });
+    }
     res.status(500).json({
       success: false,
       message: 'Failed to get driver profile'
@@ -682,11 +779,11 @@ export const getDriverProfile = async (req, res) => {
   }
 };
 
-// Admin function to verify individual document
+// Admin function to verify document
 export const verifyDocument = async (req, res) => {
   try {
     const { applicationId, documentType, subDocument, status, rejectionReason } = req.body;
-    const adminId = req.admin?._id; // Assuming admin auth middleware
+    const adminId = req.admin?._id;
 
     const application = await DriverApplication.findById(applicationId);
     if (!application) {
@@ -696,7 +793,6 @@ export const verifyDocument = async (req, res) => {
       });
     }
 
-    // Handle verification based on document type
     if (documentType === 'aadharCard' && subDocument) {
       if (subDocument === 'front' && application.aadharCard?.front) {
         application.aadharCard.front.verification = {
@@ -714,7 +810,6 @@ export const verifyDocument = async (req, res) => {
         };
       }
 
-      // Update overall aadhar status
       if (application.aadharCard?.front?.verification?.status === 'verified' &&
           application.aadharCard?.back?.verification?.status === 'verified') {
         application.aadharCard.verification = { status: 'verified' };
@@ -723,7 +818,6 @@ export const verifyDocument = async (req, res) => {
         application.aadharCard.verification = { status: 'rejected' };
       }
     } else {
-      // Verify regular document
       if (application[documentType]) {
         application[documentType].verification = {
           status,
@@ -734,14 +828,12 @@ export const verifyDocument = async (req, res) => {
       }
     }
 
-    // Calculate overall application status
     application.verificationStatus = application.calculateOverallStatus?.() || 
       (status === 'verified' ? 'verified' : 'rejected');
     
     if (application.verificationStatus === 'verified') {
       application.reviewedAt = new Date();
       
-      // Create or update driver entry
       let driver = await Driver.findOne({ phone: application.phone });
       
       if (!driver) {
