@@ -18,12 +18,18 @@ import {
   getNearbyDrivers,
   calculateFareEstimate,
   getDriverPendingRequests,
-  updateDriverLocation  // Add this import
+  updateDriverLocation , // Add this import,
+  getDriverLocationForTracking,
+  getRideTrackingInfo,
+  acceptRideWithSocket,
+  updateDriverLocationWithSocket
+
 } from '../controllers/rideController.js';
 import { authMiddleware } from '../middleware/authMiddleware.js';
 import { customerAuthMiddleware } from '../middleware/customerAuthMiddleware.js';
 import driverAuthMiddleware from '../middleware/driverAuthMiddleware.js';
 
+import { validateCancelRide } from '../middleware/validateCancelRide.js';
 export const getAllRides = async (req, res) => {
   try {
     const { page = 1, limit = 10, status, search } = req.query;
@@ -78,7 +84,15 @@ router.get('/history', customerAuthMiddleware, getCustomerRideHistory);
 router.get('/:rideId/status', customerAuthMiddleware, getRideStatus);
 router.get('/:rideId/track', customerAuthMiddleware, trackRide);
 router.post('/:rideId/rate-driver', customerAuthMiddleware, rateDriver);
+// Add these routes to your existing rideRoutes.js
+// Add this route
+router.post('/update-location-socket', driverAuthMiddleware, updateDriverLocationWithSocket);
+// Customer tracking routes
+router.get('/:rideId/driver-location', customerAuthMiddleware, getDriverLocationForTracking);
+router.get('/:rideId/tracking-info', authMiddleware, getRideTrackingInfo);
 
+// Enhanced driver routes (replace existing ones if you want to use socket version)
+router.post('/accept-with-socket', driverAuthMiddleware, acceptRideWithSocket);
 // ==================== DRIVER ROUTES ====================
 router.get('/driver/pending-requests', driverAuthMiddleware, getDriverPendingRequests);  // Add this route
 // In your routes file (e.g., driverRoutes.js)
@@ -93,7 +107,7 @@ router.get('/driver/history', driverAuthMiddleware, getDriverRideHistory);
 router.post('/:rideId/rate-customer', driverAuthMiddleware, rateCustomer);
 
 // ==================== SHARED ROUTES ====================
-router.post('/:rideId/cancel', authMiddleware, cancelRide);
+router.post('/:rideId/cancel', authMiddleware, validateCancelRide, cancelRide);
 router.get('/', authMiddleware, getAllRides);
 
 export default router;

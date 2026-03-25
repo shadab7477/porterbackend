@@ -805,3 +805,41 @@ export const toggleDriverActive = async (req, res) => {
     });
   }
 };
+
+// Add these functions to your existing driverController.js
+
+// Update driver location with socket broadcast
+
+
+// Helper function to find nearby customers
+async function findNearbyCustomers(latitude, longitude, radius) {
+  try {
+    // Find rides that are searching for drivers
+    const Ride = (await import('../models/Ride.js')).default;
+    const searchingRides = await Ride.find({
+      status: 'searching',
+      'customer.customerId': { $exists: true }
+    }).populate('customer.customerId');
+
+    const nearbyCustomers = [];
+    
+    for (const ride of searchingRides) {
+      const [pickupLon, pickupLat] = ride.pickupLocation.coordinates;
+      const distance = calculateDistance(latitude, longitude, pickupLat, pickupLon);
+      
+      if (distance <= radius) {
+        nearbyCustomers.push({
+          customerId: ride.customer.customerId,
+          rideId: ride.rideId,
+          distance,
+          pickupLocation: ride.pickupLocation
+        });
+      }
+    }
+    
+    return nearbyCustomers;
+  } catch (error) {
+    console.error('Error finding nearby customers:', error);
+    return [];
+  }
+}

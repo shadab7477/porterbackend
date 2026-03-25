@@ -1151,12 +1151,15 @@ export const completeRide = async (req, res) => {
 };
 
 // 9. Cancel ride
+// ==================== CANCEL RIDE - NO PENALTIES ====================
 export const cancelRide = async (req, res) => {
   try {
     const { rideId, reason } = req.body;
     const userType = req.customerId ? 'customer' : (req.driver ? 'driver' : null);
     const userId = req.customerId || req.driver?.id;
+    const io = req.app.get('io');
 
+    // Validation
     if (!userType) {
       return res.status(401).json({
         success: false,
@@ -1164,67 +1167,160 @@ export const cancelRide = async (req, res) => {
       });
     }
 
-    const ride = await Ride.findOne({
-      rideId,
-      status: { $in: ['requested', 'searching', 'driver_assigned'] }
-    });
+    if (!rideId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ride ID is required'
+      });
+    }
+
+    // Find ride with proper population
+    const ride = await Ride.findOne({ rideId })
+      .populate('customer.customerId')
+      .populate('driver.driverId');
 
     if (!ride) {
       return res.status(404).json({
         success: false,
-        message: 'Ride not found or cannot be cancelled'
+        message: 'Ride not found'
       });
     }
 
-    if (userType === 'customer' && ride.customer.customerId.toString() !== userId) {
-      return res.status(403).json({
+    // Check if ride can be cancelled
+    const cancellableStatuses = ['requested', 'searching', 'driver_assigned'];
+    if (!cancellableStatuses.includes(ride.status)) {
+      return res.status(400).json({
         success: false,
-        message: 'Not authorized to cancel this ride'
+        message: `Ride cannot be cancelled in current status: ${ride.status}. Only ${cancellableStatuses.join(', ')} rides can be cancelled.`
       });
     }
 
-    if (userType === 'driver' && ride.driver?.driverId?.toString() !== userId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to cancel this ride'
-      });
+    // Authorization check
+    if (userType === 'customer') {
+      if (!ride.customer || ride.customer.customerId._id.toString() !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to cancel this ride'
+        });
+      }
+    } else if (userType === 'driver') {
+      if (!ride.driver || ride.driver.driverId._id.toString() !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to cancel this ride'
+        });
+      }
     }
 
-    let cancellationFee = 0;
-    if (ride.status === 'driver_assigned' && userType === 'customer') {
-      cancellationFee = 50;
-    }
-
+    // NO CANCELLATION FEE - Simple cancellation
+    // Update ride status
     ride.status = 'cancelled';
     ride.cancelledAt = new Date();
     ride.cancelledBy = userType;
-    ride.cancellationReason = reason;
-    ride.cancellationFee = cancellationFee;
+    ride.cancellationReason = reason || (userType === 'customer' ? 'Cancelled by customer' : 'Cancelled by driver');
+    ride.cancellationFee = 0; // No fee
+    
+    // Handle payment refund if applicable
+    let refundAmount = 0;
+    let paymentRefundNeeded = false;
+    
+    if (ride.paymentMethod !== 'cash' && ride.paymentStatus === 'completed') {
+      // Full refund for prepaid rides
+      refundAmount = ride.fare.finalAmount;
+      paymentRefundNeeded = true;
+      ride.paymentStatus = 'refunded';
+      ride.refundAmount = refundAmount;
+      ride.refundProcessedAt = new Date();
+    }
+    
     await ride.save();
 
-    if (ride.driver?.driverId) {
-      await Driver.findByIdAndUpdate(ride.driver.driverId, {
-        isAvailable: true
+    // Update driver availability
+    if (ride.driver && ride.driver.driverId) {
+      const driver = await Driver.findById(ride.driver.driverId);
+      if (driver) {
+        driver.isAvailable = true;
+        await driver.save();
+      }
+    }
+
+    // Prepare cancellation data for socket emission
+    const cancellationData = {
+      rideId: ride.rideId,
+      cancelledBy: userType,
+      reason: ride.cancellationReason,
+      timestamp: new Date(),
+      message: `Ride cancelled by ${userType}`
+    };
+
+    // ==================== SOCKET EMISSIONS ====================
+    
+    // 1. Notify customer (if they didn't cancel)
+    if (ride.customer && ride.customer.customerId && userType !== 'customer') {
+      io.to(`customer:${ride.customer.customerId._id}`).emit('ride:cancelled', cancellationData);
+      console.log(`📡 Cancellation notified to customer: ${ride.customer.customerId._id}`);
+    }
+
+    // 2. Notify driver (if they didn't cancel and driver exists)
+    if (ride.driver && ride.driver.driverId && userType !== 'driver') {
+      io.to(`driver:${ride.driver.driverId._id}`).emit('ride:cancelled', cancellationData);
+      console.log(`📡 Cancellation notified to driver: ${ride.driver.driverId._id}`);
+    }
+
+    // 3. Notify all drivers who were previously notified about this ride
+    if (ride.driversNotified && ride.driversNotified.length > 0) {
+      ride.driversNotified.forEach(notification => {
+        if (notification.driverId && notification.driverId.toString() !== userId) {
+          io.to(`driver:${notification.driverId}`).emit('ride:cancelled', {
+            ...cancellationData,
+            message: `Ride ${ride.rideId} has been cancelled`
+          });
+          console.log(`📡 Cancellation notified to previously notified driver: ${notification.driverId}`);
+        }
       });
     }
 
-    const io = req.app.get('io');
-    io.emit(`ride:${ride.rideId}:cancelled`, {
-      rideId: ride.rideId,
-      cancelledBy: userType,
-      reason,
-      cancellationFee
+    // 4. Notify ride tracking namespace (for real-time updates)
+    const rideTrackingNsp = io.of('/ride-tracking');
+    if (rideTrackingNsp) {
+      rideTrackingNsp.to(`ride:${ride.rideId}`).emit('ride:cancelled', cancellationData);
+      console.log(`📡 Cancellation emitted to ride tracking room: ride:${ride.rideId}`);
+    }
+
+    // 5. Notify admin for monitoring
+    io.of('/admin').to('admin-room').emit('ride:cancelled', {
+      ...cancellationData,
+      rideDetails: {
+        customerName: ride.customer?.name,
+        driverName: ride.driver?.name,
+        pickupLocation: ride.pickupLocation?.address,
+        dropLocation: ride.dropLocation?.address,
+        fare: ride.fare?.total
+      }
     });
+    console.log(`📡 Cancellation notified to admin`);
+
+    // Prepare response data
+    const responseData = {
+      rideId: ride.rideId,
+      status: ride.status,
+      cancelledAt: ride.cancelledAt,
+      cancelledBy: ride.cancelledBy,
+      cancellationReason: ride.cancellationReason,
+      message: `Ride cancelled successfully`
+    };
+
+    // Add refund info if applicable
+    if (paymentRefundNeeded) {
+      responseData.refundAmount = refundAmount;
+      responseData.paymentStatus = ride.paymentStatus;
+      responseData.message = `Ride cancelled successfully. Full refund of ₹${refundAmount} will be processed.`;
+    }
 
     res.json({
       success: true,
-      message: 'Ride cancelled successfully',
-      data: {
-        rideId: ride.rideId,
-        status: ride.status,
-        cancelledAt: ride.cancelledAt,
-        cancellationFee
-      }
+      message: responseData.message,
+      data: responseData
     });
 
   } catch (error) {
@@ -2003,7 +2099,437 @@ export const calculateFareEstimate = async (req, res) => {
     });
   }
 };
+// Add these functions to your existing driverController.js
 
+// Update driver location with socket broadcast
+export const updateDriverLocationWithSocket = async (req, res) => {
+  try {
+    const driverId = req.driver.id;
+    const { latitude, longitude, rideId } = req.body;
+    const io = req.app.get('io');
+
+    if (!latitude || !longitude) {
+      return res.status(400).json({
+        success: false,
+        message: 'Latitude and longitude are required'
+      });
+    }
+
+    // Update driver location in database
+    const driver = await Driver.findByIdAndUpdate(
+      driverId,
+      {
+        currentLocation: {
+          type: 'Point',
+          coordinates: [parseFloat(longitude), parseFloat(latitude)]
+        },
+        lastActive: new Date()
+      },
+      { new: true }
+    );
+
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
+      });
+    }
+
+    // Emit location update through socket
+    const locationData = {
+      driverId,
+      latitude,
+      longitude,
+      rideId: rideId || null,
+      timestamp: new Date(),
+      driverDetails: {
+        name: driver.name,
+        vehicleType: driver.vehicleType,
+        vehicleNumber: driver.vehicleNumber,
+        rating: driver.rating
+      }
+    };
+
+    // If on a ride, broadcast to ride room
+    if (rideId) {
+      io.to(`ride:${rideId}`).emit('driver:location-updated', locationData);
+      
+      // Also emit to ride tracking namespace
+      const rideTrackingNsp = io.of('/ride-tracking');
+      rideTrackingNsp.to(`ride:${rideId}`).emit('driver:location-updated', locationData);
+    } else {
+      // Broadcast to nearby customers looking for rides
+      const nearbyCustomers = await findNearbyCustomers(latitude, longitude, 5);
+      nearbyCustomers.forEach(customer => {
+        io.to(`customer:${customer.customerId}`).emit('driver:nearby', {
+          driverId,
+          location: { latitude, longitude },
+          driverDetails: locationData.driverDetails,
+          distance: customer.distance
+        });
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Location updated successfully',
+      data: {
+        lat: latitude,
+        lng: longitude,
+        lastActive: driver.lastActive
+      }
+    });
+
+  } catch (error) {
+    console.error('Update driver location error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to update location'
+    });
+  }
+};
+
+// Helper function to find nearby customers
+async function findNearbyCustomers(latitude, longitude, radius) {
+  try {
+    // Find rides that are searching for drivers
+    const Ride = (await import('../models/Ride.js')).default;
+    const searchingRides = await Ride.find({
+      status: 'searching',
+      'customer.customerId': { $exists: true }
+    }).populate('customer.customerId');
+
+    const nearbyCustomers = [];
+    
+    for (const ride of searchingRides) {
+      const [pickupLon, pickupLat] = ride.pickupLocation.coordinates;
+      const distance = calculateDistance(latitude, longitude, pickupLat, pickupLon);
+      
+      if (distance <= radius) {
+        nearbyCustomers.push({
+          customerId: ride.customer.customerId,
+          rideId: ride.rideId,
+          distance,
+          pickupLocation: ride.pickupLocation
+        });
+      }
+    }
+    
+    return nearbyCustomers;
+  } catch (error) {
+    console.error('Error finding nearby customers:', error);
+    return [];
+  }
+}
+
+
+
+// Add these functions to your existing rideController.js
+
+// Enhanced ride acceptance with socket
+export const acceptRideWithSocket = async (req, res) => {
+  try {
+    const driverId = req.driver.id;
+    const { rideId, driverLocation } = req.body;
+    const io = req.app.get('io');
+
+    const driver = await Driver.findById(driverId);
+    if (!driver || !driver.isOnline || !driver.isAvailable) {
+      return res.status(400).json({
+        success: false,
+        message: 'You must be online and available to accept rides'
+      });
+    }
+
+    const ride = await Ride.findOne({ rideId, status: 'searching' });
+    if (!ride) {
+      return res.status(404).json({
+        success: false,
+        message: 'Ride not found or already assigned'
+      });
+    }
+
+    // Calculate distance to pickup
+    const [pickupLon, pickupLat] = ride.pickupLocation.coordinates;
+    const distanceToPickup = calculateDistance(
+      driverLocation.latitude,
+      driverLocation.longitude,
+      pickupLat,
+      pickupLon
+    );
+
+    const MAX_ACCEPTABLE_DISTANCE = 5; // km
+    if (distanceToPickup > MAX_ACCEPTABLE_DISTANCE) {
+      return res.status(400).json({
+        success: false,
+        message: `You are too far from pickup location (${distanceToPickup.toFixed(1)}km)`
+      });
+    }
+
+    // Calculate ETA
+    const speed = getAverageSpeed(driver.vehicleType);
+    const etaToPickup = Math.ceil((distanceToPickup / speed) * 60);
+
+    // Update ride
+    ride.driver = {
+      driverId: driver._id,
+      name: driver.name,
+      phone: driver.phone,
+      vehicleType: driver.vehicleType,
+      vehicleNumber: driver.vehicleNumber,
+      rating: driver.rating || 0
+    };
+    ride.updateStatus('driver_assigned');
+    ride.driverETA = {
+      distance: distanceToPickup,
+      duration: etaToPickup,
+      distanceText: `${distanceToPickup.toFixed(1)} km`,
+      durationText: `${etaToPickup} mins`
+    };
+    await ride.save();
+
+    // Update driver status
+    driver.isAvailable = false;
+    await driver.save();
+
+    // Emit socket events
+    const acceptanceData = {
+      rideId: ride.rideId,
+      driver: {
+        driverId: driver._id,
+        name: driver.name,
+        phone: driver.phone,
+        vehicleType: driver.vehicleType,
+        vehicleNumber: driver.vehicleNumber,
+        rating: driver.rating,
+        location: driverLocation
+      },
+      eta: etaToPickup,
+      etaText: `${etaToPickup} mins`,
+      pickupLocation: ride.pickupLocation,
+      dropLocation: ride.dropLocation,
+      fare: ride.fare.total
+    };
+
+    // Notify customer
+    io.to(`customer:${ride.customer.customerId}`).emit('ride:accepted', acceptanceData);
+    
+    // Also emit to ride tracking namespace
+    const rideTrackingNsp = io.of('/ride-tracking');
+    rideTrackingNsp.to(`ride:${ride.rideId}`).emit('ride:accepted', acceptanceData);
+
+    // Notify other drivers that this ride is taken
+    ride.driversNotified?.forEach(d => {
+      if (d.driverId.toString() !== driverId) {
+        io.to(`driver:${d.driverId}`).emit('ride:taken', {
+          rideId: ride.rideId,
+          message: 'This ride was accepted by another driver'
+        });
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Ride accepted successfully',
+      data: {
+        rideId: ride.rideId,
+        customer: ride.customer,
+        pickupLocation: ride.pickupLocation,
+        dropLocation: ride.dropLocation,
+        eta: etaToPickup,
+        etaText: `${etaToPickup} mins`,
+        fare: ride.fare.total
+      }
+    });
+
+  } catch (error) {
+    console.error('Accept ride error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to accept ride'
+    });
+  }
+};
+
+// Get driver location for tracking (for customers)
+export const getDriverLocationForTracking = async (req, res) => {
+  try {
+    const { rideId } = req.params;
+    const customerId = req.customerId;
+    
+    const ride = await Ride.findOne({ rideId, 'customer.customerId': customerId });
+    
+    if (!ride) {
+      return res.status(404).json({
+        success: false,
+        message: 'Ride not found'
+      });
+    }
+    
+    if (!ride.driver?.driverId) {
+      return res.status(404).json({
+        success: false,
+        message: 'No driver assigned yet'
+      });
+    }
+    
+    const driver = await Driver.findById(ride.driver.driverId);
+    
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
+      });
+    }
+    
+    const [lng, lat] = driver.currentLocation.coordinates;
+    
+    // Calculate ETA based on ride status
+    let eta = null;
+    let etaText = null;
+    let remainingDistance = null;
+    
+    if (ride.status === 'driver_assigned' || ride.status === 'driver_arrived') {
+      const [pickupLon, pickupLat] = ride.pickupLocation.coordinates;
+      const distance = calculateDistance(lat, lng, pickupLat, pickupLon);
+      const speed = getAverageSpeed(driver.vehicleType);
+      eta = Math.ceil((distance / speed) * 60);
+      etaText = `${eta} mins`;
+      remainingDistance = distance;
+    } else if (ride.status === 'in_progress') {
+      const [dropLon, dropLat] = ride.dropLocation.coordinates;
+      const distance = calculateDistance(lat, lng, dropLat, dropLon);
+      const speed = getAverageSpeed(driver.vehicleType);
+      eta = Math.ceil((distance / speed) * 60);
+      etaText = `${eta} mins`;
+      remainingDistance = distance;
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        driverId: driver._id,
+        name: driver.name,
+        phone: driver.phone,
+        vehicleType: driver.vehicleType,
+        vehicleNumber: driver.vehicleNumber,
+        rating: driver.rating,
+        location: { lat, lng },
+        eta,
+        etaText,
+        remainingDistance,
+        rideStatus: ride.status
+      }
+    });
+    
+  } catch (error) {
+    console.error('Get driver location error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to get driver location'
+    });
+  }
+};
+
+// Get ride tracking info
+export const getRideTrackingInfo = async (req, res) => {
+  try {
+    const { rideId } = req.params;
+    const userId = req.customerId || req.driver?.id;
+    
+    const ride = await Ride.findOne({ rideId });
+    
+    if (!ride) {
+      return res.status(404).json({
+        success: false,
+        message: 'Ride not found'
+      });
+    }
+    
+    // Check authorization
+    if (req.customerId && ride.customer.customerId.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized'
+      });
+    }
+    
+    if (req.driver && ride.driver?.driverId?.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized'
+      });
+    }
+    
+    let driverLocation = null;
+    let driverDetails = null;
+    
+    if (ride.driver?.driverId) {
+      const driver = await Driver.findById(ride.driver.driverId);
+      if (driver && driver.currentLocation) {
+        const [lng, lat] = driver.currentLocation.coordinates;
+        driverLocation = { lat, lng };
+        driverDetails = {
+          name: driver.name,
+          phone: driver.phone,
+          vehicleType: driver.vehicleType,
+          vehicleNumber: driver.vehicleNumber,
+          rating: driver.rating
+        };
+      }
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        rideId: ride.rideId,
+        status: ride.status,
+        driverLocation,
+        driverDetails,
+        pickupLocation: ride.pickupLocation,
+        dropLocation: ride.dropLocation,
+        fare: ride.fare,
+        timestamps: {
+          requestedAt: ride.requestedAt,
+          driverAssignedAt: ride.driverAssignedAt,
+          driverArrivedAt: ride.driverArrivedAt,
+          rideStartedAt: ride.rideStartedAt,
+          rideCompletedAt: ride.rideCompletedAt
+        }
+      }
+    });
+    
+  } catch (error) {
+    console.error('Get ride tracking info error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to get tracking info'
+    });
+  }
+};
+
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+
+function getAverageSpeed(vehicleType) {
+  const speeds = {
+    'bike': 30,
+    'auto': 25,
+    'car': 30,
+    'mini_truck': 25,
+    'truck': 20
+  };
+  return speeds[vehicleType] || 25;
+}
 // Export all functions
 export {
   findNearbyDrivers,

@@ -21,6 +21,7 @@ const router = express.Router();
 
 router.use(authMiddleware);
 
+
 router.get('/', getAllDrivers);
 router.get('/available', getAvailableDrivers);
 router.get('/pending-verification', getPendingVerifications);

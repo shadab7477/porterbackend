@@ -1,3 +1,4 @@
+// server.js or index.js - Update your existing file
 import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
@@ -9,6 +10,7 @@ import { fileURLToPath } from 'url';
 import connectDB from './config/database.js';
 import initializeSockets from './sockets/socketHandler.js';
 import { initializeSupportSockets } from './sockets/supportSocketHandler.js';
+import { initializeRideTrackingSockets } from './sockets/rideTrackingSocket.js'; // New file we'll create
 
 // Routes
 import driverRoutes from './routes/driverRoutes.js';
@@ -33,35 +35,43 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const server = http.createServer(app);
 
-// ✅ Socket.IO setup
+// ✅ Socket.IO setup with enhanced configuration
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_URL || "https://godelivo.com",
+    origin: process.env.CLIENT_URL || ["http://localhost:3000", "https://godelivo.com"],
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE"],
     credentials: true
-  }
+  },
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  transports: ['websocket', 'polling']
 });
+
+// Store active connections globally
+global.activeDrivers = new Map(); // driverId -> socketId
+global.activeCustomers = new Map(); // customerId -> socketId
+global.activeRides = new Map(); // rideId -> { driverId, customerId, driverSocket, customerSocket }
 
 // DB connect
 connectDB();
 
-// Custom socket handlers
+// Initialize all socket handlers
 initializeSockets(io);
 initializeSupportSockets(io);
+initializeRideTrackingSockets(io); // New ride tracking socket handler
 
 app.set('io', io);
 
 // ✅ Middlewares
 app.use(cors({
-  origin: process.env.CLIENT_URL || "https://godelivo.com",
+  origin: process.env.CLIENT_URL || ["http://localhost:3000", "https://godelivo.com"],
   credentials: true
 }));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ================== ✅ API ROUTES FIRST ==================
-
+// ================== ✅ API ROUTES ==================
 app.use('/api/auth', authRoutes);
 app.use('/api/drivers', driverRoutes);
 app.use('/api/orders', orderRoutes);
@@ -81,63 +91,13 @@ app.get('/health', (req, res) => {
 });
 
 // ================== ✅ REACT BUILD SERVE ==================
-
 app.use(express.static(path.join(__dirname, 'build')));
 
-// ⚡ IMPORTANT: React routing fix
 app.get(/^\/(?!api).*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
-// ================== ✅ SOCKET.IO ==================
-
-io.on('connection', (socket) => {
-  console.log('🟢 Client connected:', socket.id);
-
-  // User location update
-  socket.on('user:location_update', (data) => {
-    const { latitude, longitude } = data;
-
-    socket.broadcast.emit('user:nearby', {
-      userId: socket.id,
-      latitude,
-      longitude
-    });
-  });
-
-  // Driver location update
-  socket.on('driver:location_update', (data) => {
-    const { driverId, latitude, longitude, vehicleType } = data;
-
-    socket.broadcast.emit('driver:location_updated', {
-      driverId,
-      lat: latitude,
-      lng: longitude,
-      vehicleType,
-      timestamp: new Date().toISOString()
-    });
-
-    socket.to(`area-${Math.floor(latitude)}-${Math.floor(longitude)}`)
-      .emit('driver:moved', data);
-  });
-
-  // Join room
-  socket.on('join', (room) => {
-    socket.join(room);
-    console.log(`📡 ${socket.id} joined ${room}`);
-  });
-
-  socket.on('disconnect', () => {
-    console.log('🔴 Client disconnected:', socket.id);
-
-    socket.broadcast.emit('driver:left_area', {
-      driverId: socket.driverId
-    });
-  });
-});
-
 // ================== ✅ ERROR HANDLER ==================
-
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({
@@ -148,7 +108,6 @@ app.use((err, req, res, next) => {
 });
 
 // ================== ✅ SERVER START ==================
-
 const PORT = process.env.PORT || 5000;
 
 server.listen(PORT, () => {
