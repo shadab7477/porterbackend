@@ -11,6 +11,7 @@ export const initializeRideTrackingSockets = (io) => {
   
   rideTrackingNsp.on('connection', (socket) => {
     console.log(`🟢 Ride tracking client connected: ${socket.id}`);
+    console.log(socket);
     
     // Driver joins for real-time location updates
     socket.on('driver:join-tracking', async (data) => {

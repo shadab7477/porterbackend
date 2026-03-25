@@ -1162,7 +1162,7 @@ export const completeRide = async (req, res) => {
 
 // ==================== CANCEL RIDE - FIXED VERSION ====================
 export const cancelRide = async (req, res) => {
-  try {
+  try { 
     const { rideId, reason } = req.body;
     
     // FIX: Properly determine user type and ID from request
