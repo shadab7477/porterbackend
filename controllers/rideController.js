@@ -737,6 +737,7 @@ export const acceptRide = async (req, res) => {
   try {
     const driverId = req.driver.id;
     const { rideId } = req.body;
+console.log(req.body);
 
     const driver = await Driver.findById(driverId);
     if (!driver || !driver.isOnline || !driver.isAvailable) {
@@ -745,14 +746,19 @@ export const acceptRide = async (req, res) => {
         message: 'You must be online and available to accept rides'
       });
     }
-
-    const ride = await Ride.findOne({ rideId, status: 'searching' });
+const ride = await Ride.findOne({
+  rideId,
+  status: { $in: ['searching', 'no_drivers'] }
+})
     if (!ride) {
       return res.status(404).json({
         success: false,
         message: 'Ride not found or already assigned'
       });
     }
+
+    console.log(ride);
+    
 
     const [driverLon, driverLat] = driver.currentLocation.coordinates;
     const [pickupLon, pickupLat] = ride.pickupLocation.coordinates;
@@ -1152,18 +1158,40 @@ export const completeRide = async (req, res) => {
 
 // 9. Cancel ride
 // ==================== CANCEL RIDE - NO PENALTIES ====================
+// controllers/rideController.js - Updated cancelRide function
+
+// ==================== CANCEL RIDE - FIXED VERSION ====================
 export const cancelRide = async (req, res) => {
   try {
     const { rideId, reason } = req.body;
-    const userType = req.customerId ? 'customer' : (req.driver ? 'driver' : null);
-    const userId = req.customerId || req.driver?.id;
-    const io = req.app.get('io');
-
-    // Validation
+    
+    // FIX: Properly determine user type and ID from request
+    let userType = null;
+    let userId = null;
+    
+    // Check if it's a customer (has customerId from customerAuthMiddleware)
+    if (req.customerId) {
+      userType = 'customer';
+      userId = req.customerId;
+      console.log('👤 Cancelling as CUSTOMER:', userId);
+    }
+    // Check if it's a driver (has driver from driverAuthMiddleware)
+    else if (req.driver && req.driver.id) {
+      userType = 'driver';
+      userId = req.driver.id;
+      console.log('👤 Cancelling as DRIVER:', userId);
+    }
+    // Check if it's admin (has adminId from authMiddleware)
+    else if (req.adminId) {
+      userType = 'admin';
+      userId = req.adminId;
+      console.log('👤 Cancelling as ADMIN:', userId);
+    }
+    
     if (!userType) {
       return res.status(401).json({
         success: false,
-        message: 'Authentication required'
+        message: 'Authentication required. Please login as customer or driver.'
       });
     }
 
@@ -1182,42 +1210,67 @@ export const cancelRide = async (req, res) => {
     if (!ride) {
       return res.status(404).json({
         success: false,
-        message: 'Ride not found'
+        message: `Ride with ID ${rideId} not found`
       });
     }
+
+    console.log('🚗 Ride found:', {
+      rideId: ride.rideId,
+      status: ride.status,
+      customerId: ride.customer?.customerId?._id,
+      driverId: ride.driver?.driverId?._id
+    });
 
     // Check if ride can be cancelled
     const cancellableStatuses = ['requested', 'searching', 'driver_assigned'];
     if (!cancellableStatuses.includes(ride.status)) {
       return res.status(400).json({
         success: false,
-        message: `Ride cannot be cancelled in current status: ${ride.status}. Only ${cancellableStatuses.join(', ')} rides can be cancelled.`
+        message: `Ride cannot be cancelled. Current status: ${ride.status}. Only ${cancellableStatuses.join(', ')} rides can be cancelled.`
       });
     }
 
-    // Authorization check
+    // Authorization check based on user type
+    let isAuthorized = false;
+    
     if (userType === 'customer') {
-      if (!ride.customer || ride.customer.customerId._id.toString() !== userId) {
-        return res.status(403).json({
-          success: false,
-          message: 'Not authorized to cancel this ride'
-        });
+      const rideCustomerId = ride.customer?.customerId?._id?.toString() || ride.customer?.customerId?.toString();
+      if (rideCustomerId === userId.toString()) {
+        isAuthorized = true;
+        console.log('✅ Customer authorized to cancel');
+      } else {
+        console.log('❌ Customer not authorized:', { rideCustomerId, userId });
       }
-    } else if (userType === 'driver') {
-      if (!ride.driver || ride.driver.driverId._id.toString() !== userId) {
-        return res.status(403).json({
-          success: false,
-          message: 'Not authorized to cancel this ride'
-        });
+    } 
+    else if (userType === 'driver') {
+      const rideDriverId = ride.driver?.driverId?._id?.toString() || ride.driver?.driverId?.toString();
+      if (rideDriverId === userId.toString()) {
+        isAuthorized = true;
+        console.log('✅ Driver authorized to cancel');
+      } else {
+        console.log('❌ Driver not authorized:', { rideDriverId, userId });
       }
+    }
+    else if (userType === 'admin') {
+      isAuthorized = true;
+      console.log('✅ Admin authorized to cancel');
+    }
+    
+    if (!isAuthorized) {
+      return res.status(403).json({
+        success: false,
+        message: `Not authorized to cancel this ride. You are logged in as ${userType} but this ride belongs to ${ride.customer?.customerId?._id === userId ? 'you' : 'another user'}.`
+      });
     }
 
     // NO CANCELLATION FEE - Simple cancellation
+    const io = req.app.get('io');
+    
     // Update ride status
     ride.status = 'cancelled';
     ride.cancelledAt = new Date();
     ride.cancelledBy = userType;
-    ride.cancellationReason = reason || (userType === 'customer' ? 'Cancelled by customer' : 'Cancelled by driver');
+    ride.cancellationReason = reason || (userType === 'customer' ? 'Cancelled by customer' : (userType === 'driver' ? 'Cancelled by driver' : 'Cancelled by admin'));
     ride.cancellationFee = 0; // No fee
     
     // Handle payment refund if applicable
@@ -1234,6 +1287,7 @@ export const cancelRide = async (req, res) => {
     }
     
     await ride.save();
+    console.log('✅ Ride cancelled and saved');
 
     // Update driver availability
     if (ride.driver && ride.driver.driverId) {
@@ -1241,6 +1295,7 @@ export const cancelRide = async (req, res) => {
       if (driver) {
         driver.isAvailable = true;
         await driver.save();
+        console.log('✅ Driver availability updated:', driver._id);
       }
     }
 
@@ -1250,21 +1305,30 @@ export const cancelRide = async (req, res) => {
       cancelledBy: userType,
       reason: ride.cancellationReason,
       timestamp: new Date(),
-      message: `Ride cancelled by ${userType}`
+      message: `Ride cancelled by ${userType}`,
+      cancellationFee: 0
     };
+
+    // Add refund info if applicable
+    if (paymentRefundNeeded) {
+      cancellationData.refundAmount = refundAmount;
+      cancellationData.message = `Ride cancelled. Full refund of ₹${refundAmount} will be processed.`;
+    }
 
     // ==================== SOCKET EMISSIONS ====================
     
     // 1. Notify customer (if they didn't cancel)
     if (ride.customer && ride.customer.customerId && userType !== 'customer') {
-      io.to(`customer:${ride.customer.customerId._id}`).emit('ride:cancelled', cancellationData);
-      console.log(`📡 Cancellation notified to customer: ${ride.customer.customerId._id}`);
+      const customerId = ride.customer.customerId._id || ride.customer.customerId;
+      io.to(`customer:${customerId}`).emit('ride:cancelled', cancellationData);
+      console.log(`📡 Cancellation notified to customer: ${customerId}`);
     }
 
     // 2. Notify driver (if they didn't cancel and driver exists)
     if (ride.driver && ride.driver.driverId && userType !== 'driver') {
-      io.to(`driver:${ride.driver.driverId._id}`).emit('ride:cancelled', cancellationData);
-      console.log(`📡 Cancellation notified to driver: ${ride.driver.driverId._id}`);
+      const driverId = ride.driver.driverId._id || ride.driver.driverId;
+      io.to(`driver:${driverId}`).emit('ride:cancelled', cancellationData);
+      console.log(`📡 Cancellation notified to driver: ${driverId}`);
     }
 
     // 3. Notify all drivers who were previously notified about this ride
@@ -1324,7 +1388,7 @@ export const cancelRide = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Cancel ride error:', error);
+    console.error('❌ Cancel ride error:', error);
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to cancel ride'
