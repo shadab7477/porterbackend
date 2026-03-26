@@ -6,7 +6,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import connectDB from './config/database.js';
-import pusherService from './services/pusherService.js';
+// import pusherService from './services/pusherService.js';
 
 // Routes
 // import driverRoutes from './routes/driverRoutes.js';
@@ -31,15 +31,15 @@ const app = express();
 const server = http.createServer(app);
 
 // Store active connections globally
-global.activeDrivers = new Map();
-global.activeCustomers = new Map();
-global.activeRides = new Map();
+// global.activeDrivers = new Map();
+// global.activeCustomers = new Map();
+// global.activeRides = new Map();
 
 // DB connect
 connectDB();
 
 // Make pusher service available globally
-app.set('pusherService', pusherService);
+// app.set('pusherService', pusherService);
 
 // Middlewares
 app.use(cors({
@@ -51,11 +51,11 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Pusher authentication endpoint
-app.post('/pusher/auth', (req, res) => {
-  const { socket_id, channel_name } = req.body;
-  const auth = pusherService.authenticate(socket_id, channel_name);
-  res.send(auth);
-});
+// app.post('/pusher/auth', (req, res) => {
+//   const { socket_id, channel_name } = req.body;
+//   const auth = pusherService.authenticate(socket_id, channel_name);
+//   res.send(auth);
+// });
 
 // ================== API ROUTES ==================
 // app.use('/api/auth', authRoutes);
