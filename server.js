@@ -9,18 +9,18 @@ import connectDB from './config/database.js';
 import pusherService from './services/pusherService.js';
 
 // Routes
-import driverRoutes from './routes/driverRoutes.js';
-import orderRoutes from './routes/orderRoutes.js';
-import vehicleRoutes from './routes/vehicleRoutes.js';
-import customerRoutes from './routes/customerRoutes.js';
-import authRoutes from './routes/authRoutes.js';
-import driverAuthRoutes from './routes/driverAuthRoutes.js';
-import rideRoutes from './routes/rideRoutes.js';
-import supportRoutes from './routes/supportRoutes.js';
-import verificationRoutes from './routes/verificationRoutes.js';
-import paymentRoutes from './routes/paymentRoutes.js';
-import notificationRoutes from './routes/notificationRoutes.js';
-import walletRoutes from './routes/walletRoutes.js';
+// import driverRoutes from './routes/driverRoutes.js';
+// import orderRoutes from './routes/orderRoutes.js';
+// import vehicleRoutes from './routes/vehicleRoutes.js';
+// import customerRoutes from './routes/customerRoutes.js';
+// import authRoutes from './routes/authRoutes.js';
+// import driverAuthRoutes from './routes/driverAuthRoutes.js';
+// import rideRoutes from './routes/rideRoutes.js';
+// import supportRoutes from './routes/supportRoutes.js';
+// import verificationRoutes from './routes/verificationRoutes.js';
+// import paymentRoutes from './routes/paymentRoutes.js';
+// import notificationRoutes from './routes/notificationRoutes.js';
+// import walletRoutes from './routes/walletRoutes.js';
 
 dotenv.config();
 
@@ -58,18 +58,18 @@ app.post('/pusher/auth', (req, res) => {
 });
 
 // ================== API ROUTES ==================
-app.use('/api/auth', authRoutes);
-app.use('/api/drivers', driverRoutes);
-app.use('/api/orders', orderRoutes);
-app.use('/api/vehicles', vehicleRoutes);
-app.use('/api/customers', customerRoutes);
-app.use('/api/driver', driverAuthRoutes);
-app.use('/api/rides', rideRoutes);
-app.use('/api/support', supportRoutes);
-app.use('/api/verification', verificationRoutes);
-app.use('/api/payments', paymentRoutes);
-app.use('/api/notifications', notificationRoutes);
-app.use('/api/wallet', walletRoutes);
+// app.use('/api/auth', authRoutes);
+// app.use('/api/drivers', driverRoutes);
+// app.use('/api/orders', orderRoutes);
+// app.use('/api/vehicles', vehicleRoutes);
+// app.use('/api/customers', customerRoutes);
+// app.use('/api/driver', driverAuthRoutes);
+// app.use('/api/rides', rideRoutes);
+// app.use('/api/support', supportRoutes);
+// app.use('/api/verification', verificationRoutes);
+// app.use('/api/payments', paymentRoutes);
+// app.use('/api/notifications', notificationRoutes);
+// app.use('/api/wallet', walletRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
