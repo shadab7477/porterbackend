@@ -9,52 +9,57 @@ class PusherService {
     this.secret = process.env.PUSHER_SECRET;
     this.cluster = process.env.PUSHER_CLUSTER;
     this.activeSessions = new Map();
+    
+    // Use HTTPS with standard port 443 (Hostinger allows this)
+    this.apiBaseUrl = `https://api-${this.cluster}.pusher.com`;
   }
 
-  // Generate auth signature for REST API
-  generateAuthSignature(method, path, body) {
+  // Generate Pusher auth signature
+  generateAuthSignature(method, path, body, timestamp) {
     const crypto = require('crypto');
-    const timestamp = Math.floor(Date.now() / 1000);
     const stringToSign = `${method}\n${path}\n${JSON.stringify(body)}\n${timestamp}`;
     const signature = crypto
       .createHmac('sha256', this.secret)
       .update(stringToSign)
       .digest('hex');
-    return { signature, timestamp };
+    return signature;
   }
 
-  // Trigger event via HTTP API (NO WebSocket)
+  // Send event via HTTP POST (standard HTTPS, not WebSocket)
   async triggerEvent(channel, event, data) {
     try {
       const path = `/apps/${this.appId}/events`;
+      const timestamp = Math.floor(Date.now() / 1000);
       const body = {
         name: event,
         channel: channel,
         data: JSON.stringify(data)
       };
       
-      const { signature, timestamp } = this.generateAuthSignature('POST', path, body);
+      const signature = this.generateAuthSignature('POST', path, body, timestamp);
       
-      const response = await axios.post(
-        `https://api-${this.cluster}.pusher.com${path}`,
-        body,
-        {
-          params: {
-            auth_key: this.key,
-            auth_timestamp: timestamp,
-            auth_version: '1.0',
-            auth_signature: signature,
-            body_md5: require('crypto').createHash('md5').update(JSON.stringify(body)).digest('hex')
-          },
-          headers: {
-            'Content-Type': 'application/json'
-          }
-        }
-      );
+      // Use axios with timeout and retry
+      const response = await axios({
+        method: 'POST',
+        url: `${this.apiBaseUrl}${path}`,
+        params: {
+          auth_key: this.key,
+          auth_timestamp: timestamp,
+          auth_version: '1.0',
+          auth_signature: signature,
+          body_md5: require('crypto').createHash('md5').update(JSON.stringify(body)).digest('hex')
+        },
+        data: body,
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000 // 10 second timeout
+      });
       
       return response.data;
     } catch (error) {
-      console.error('Pusher HTTP trigger error:', error.response?.data || error.message);
+      // Log error but don't crash
+      console.error('Pusher trigger error:', error.response?.data || error.message);
       return null;
     }
   }
@@ -63,9 +68,8 @@ class PusherService {
     return `private-ride-${rideId}`;
   }
 
-  // REST API Authentication (for clients)
+  // Client authentication (this is just string generation, no network call)
   authenticate(socketId, channelName) {
-    // This is for client-side authentication only
     const crypto = require('crypto');
     const stringToSign = `${socketId}:${channelName}`;
     const signature = crypto
@@ -104,7 +108,6 @@ class PusherService {
 
       console.log(`🚗 Driver ${driverId} joined tracking for ride ${rideId}`);
 
-      // Trigger via HTTP REST API
       await this.triggerEvent(channelName, 'tracking:joined', {
         rideId,
         userType: 'driver',
@@ -123,7 +126,7 @@ class PusherService {
       return { success: true, channelName };
     } catch (error) {
       console.error('Error in joinDriverTracking:', error);
-      throw error;
+      return { success: false, error: error.message };
     }
   }
 
@@ -190,18 +193,19 @@ class PusherService {
       return { success: true, channelName };
     } catch (error) {
       console.error('Error in joinCustomerTracking:', error);
-      throw error;
+      return { success: false, error: error.message };
     }
   }
 
   async updateDriverLocation(driverId, rideId, latitude, longitude, bearing = null) {
     try {
-      if (!latitude || !longitude) return;
+      if (!latitude || !longitude) return { success: false };
 
       const channelName = this.getRideChannel(rideId);
       const session = this.activeSessions.get(rideId);
 
-      await Driver.findByIdAndUpdate(driverId, {
+      // Update DB (don't await - let it run in background)
+      Driver.findByIdAndUpdate(driverId, {
         currentLocation: {
           type: 'Point',
           coordinates: [parseFloat(longitude), parseFloat(latitude)]
@@ -263,13 +267,14 @@ class PusherService {
         this.activeSessions.set(rideId, session);
       }
 
-      await this.triggerEvent(channelName, 'driver:location-updated', locationData);
-      await this.triggerEvent('admin-rides', 'driver:live-location', locationData);
+      // Fire and forget - don't wait for response
+      this.triggerEvent(channelName, 'driver:location-updated', locationData).catch(e => console.error);
+      this.triggerEvent('admin-rides', 'driver:live-location', locationData).catch(e => console.error);
 
       return { success: true };
     } catch (error) {
       console.error('Error updating driver location:', error);
-      throw error;
+      return { success: false, error: error.message };
     }
   }
 
@@ -322,7 +327,7 @@ class PusherService {
       return { success: true };
     } catch (error) {
       console.error('Error updating ride status:', error);
-      throw error;
+      return { success: false, error: error.message };
     }
   }
 
@@ -351,7 +356,7 @@ class PusherService {
       return { success: true };
     } catch (error) {
       console.error('Error in driverArrived:', error);
-      throw error;
+      return { success: false, error: error.message };
     }
   }
 
@@ -379,7 +384,7 @@ class PusherService {
       return { success: true };
     } catch (error) {
       console.error('Error in rideStarted:', error);
-      throw error;
+      return { success: false, error: error.message };
     }
   }
 
@@ -421,51 +426,8 @@ class PusherService {
       return { success: true };
     } catch (error) {
       console.error('Error in rideCompleted:', error);
-      throw error;
+      return { success: false, error: error.message };
     }
-  }
-
-  handleDriverDisconnect(driverId, rideId) {
-    try {
-      const session = this.activeSessions.get(rideId);
-      if (session && session.driverId === driverId) {
-        session.driverId = null;
-        this.activeSessions.set(rideId, session);
-        
-        Driver.findByIdAndUpdate(driverId, {
-          isAvailable: false,
-          isOnline: false,
-          currentRide: null
-        }).catch(err => console.error('Error updating driver:', err));
-        
-        if (session.customerId) {
-          const channelName = this.getRideChannel(rideId);
-          this.triggerEvent(channelName, 'driver:disconnected', {
-            driverId,
-            rideId,
-            message: 'Driver lost connection, reconnecting...'
-          }).catch(err => console.error('Error triggering event:', err));
-        }
-      }
-    } catch (error) {
-      console.error('Error handling driver disconnect:', error);
-    }
-  }
-
-  handleCustomerDisconnect(customerId, rideId) {
-    try {
-      const session = this.activeSessions.get(rideId);
-      if (session && session.customerId === customerId) {
-        session.customerId = null;
-        this.activeSessions.set(rideId, session);
-      }
-    } catch (error) {
-      console.error('Error handling customer disconnect:', error);
-    }
-  }
-
-  cleanupRideSession(rideId) {
-    this.activeSessions.delete(rideId);
   }
 
   calculateDistance(lat1, lon1, lat2, lon2) {
@@ -482,20 +444,11 @@ class PusherService {
 
   getAverageSpeed(vehicleType) {
     const speeds = {
-      'bike': 30,
-      'auto': 25,
-      'car': 30,
-      'mini_truck': 25,
-      'truck': 20,
-      'Tata Ace': 30,
-      'Eicher': 25,
-      'Mahindra Pickup': 28,
-      'Tata 407': 25,
-      'Ashok Leyland': 22,
-      'Force Trump': 23,
-      'BharatBenz': 22,
-      'Mahindra Furio': 25,
-      'Tata Ultra': 24
+      'bike': 30, 'auto': 25, 'car': 30,
+      'mini_truck': 25, 'truck': 20,
+      'Tata Ace': 30, 'Eicher': 25, 'Mahindra Pickup': 28,
+      'Tata 407': 25, 'Ashok Leyland': 22, 'Force Trump': 23,
+      'BharatBenz': 22, 'Mahindra Furio': 25, 'Tata Ultra': 24
     };
     return speeds[vehicleType] || 25;
   }
