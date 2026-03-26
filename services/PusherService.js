@@ -1,35 +1,81 @@
-import Pusher from 'pusher';
+import axios from 'axios';
 import Driver from '../models/Driver.js';
 import Ride from '../models/Ride.js';
 
-// Initialize Pusher
-const pusher = new Pusher({
-  appId: process.env.PUSHER_APP_ID,
-  key: process.env.PUSHER_KEY,
-  secret: process.env.PUSHER_SECRET,
-  cluster: process.env.PUSHER_CLUSTER,
-  useTLS: true
-});
-
-// Store active tracking sessions
-const activeTrackingSessions = new Map(); // rideId -> { driverId, customerId, lastLocation, channelName }
-
 class PusherService {
   constructor() {
-    this.pusher = pusher;
-    this.activeSessions = activeTrackingSessions;
+    this.appId = process.env.PUSHER_APP_ID;
+    this.key = process.env.PUSHER_KEY;
+    this.secret = process.env.PUSHER_SECRET;
+    this.cluster = process.env.PUSHER_CLUSTER;
+    this.activeSessions = new Map();
   }
 
-  getPusher() {
-    return this.pusher;
+  // Generate auth signature for REST API
+  generateAuthSignature(method, path, body) {
+    const crypto = require('crypto');
+    const timestamp = Math.floor(Date.now() / 1000);
+    const stringToSign = `${method}\n${path}\n${JSON.stringify(body)}\n${timestamp}`;
+    const signature = crypto
+      .createHmac('sha256', this.secret)
+      .update(stringToSign)
+      .digest('hex');
+    return { signature, timestamp };
+  }
+
+  // Trigger event via HTTP API (NO WebSocket)
+  async triggerEvent(channel, event, data) {
+    try {
+      const path = `/apps/${this.appId}/events`;
+      const body = {
+        name: event,
+        channel: channel,
+        data: JSON.stringify(data)
+      };
+      
+      const { signature, timestamp } = this.generateAuthSignature('POST', path, body);
+      
+      const response = await axios.post(
+        `https://api-${this.cluster}.pusher.com${path}`,
+        body,
+        {
+          params: {
+            auth_key: this.key,
+            auth_timestamp: timestamp,
+            auth_version: '1.0',
+            auth_signature: signature,
+            body_md5: require('crypto').createHash('md5').update(JSON.stringify(body)).digest('hex')
+          },
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      return response.data;
+    } catch (error) {
+      console.error('Pusher HTTP trigger error:', error.response?.data || error.message);
+      return null;
+    }
   }
 
   getRideChannel(rideId) {
     return `private-ride-${rideId}`;
   }
 
+  // REST API Authentication (for clients)
   authenticate(socketId, channelName) {
-    return this.pusher.authenticate(socketId, channelName);
+    // This is for client-side authentication only
+    const crypto = require('crypto');
+    const stringToSign = `${socketId}:${channelName}`;
+    const signature = crypto
+      .createHmac('sha256', this.secret)
+      .update(stringToSign)
+      .digest('hex');
+    
+    return {
+      auth: `${this.key}:${signature}`
+    };
   }
 
   async joinDriverTracking(driverId, rideId) {
@@ -58,7 +104,8 @@ class PusherService {
 
       console.log(`🚗 Driver ${driverId} joined tracking for ride ${rideId}`);
 
-      await this.pusher.trigger(channelName, 'tracking:joined', {
+      // Trigger via HTTP REST API
+      await this.triggerEvent(channelName, 'tracking:joined', {
         rideId,
         userType: 'driver',
         message: 'Successfully joined ride tracking'
@@ -66,7 +113,7 @@ class PusherService {
 
       const session = this.activeSessions.get(rideId);
       if (session.customerId) {
-        await this.pusher.trigger(channelName, 'driver:online', {
+        await this.triggerEvent(channelName, 'driver:online', {
           driverId,
           rideId,
           message: 'Driver is online and tracking started'
@@ -101,7 +148,7 @@ class PusherService {
 
       const ride = await Ride.findOne({ rideId });
 
-      await this.pusher.trigger(channelName, 'tracking:joined', {
+      await this.triggerEvent(channelName, 'tracking:joined', {
         rideId,
         userType: 'customer',
         rideDetails: {
@@ -115,7 +162,7 @@ class PusherService {
 
       const session = this.activeSessions.get(rideId);
       if (session.driverId) {
-        await this.pusher.trigger(channelName, 'driver:send-location', {
+        await this.triggerEvent(channelName, 'driver:send-location', {
           rideId,
           customerId
         });
@@ -123,7 +170,7 @@ class PusherService {
         const driver = await Driver.findById(session.driverId);
         if (driver && driver.currentLocation) {
           const [lng, lat] = driver.currentLocation.coordinates;
-          await this.pusher.trigger(channelName, 'driver:location-updated', {
+          await this.triggerEvent(channelName, 'driver:location-updated', {
             driverId: session.driverId,
             latitude: lat,
             longitude: lng,
@@ -189,7 +236,7 @@ class PusherService {
             await ride.save();
             
             if (session?.customerId) {
-              await this.pusher.trigger(channelName, 'ride:near-destination', {
+              await this.triggerEvent(channelName, 'ride:near-destination', {
                 rideId,
                 message: 'You are near your destination',
                 remainingDistance: distanceToDrop * 1000
@@ -216,8 +263,8 @@ class PusherService {
         this.activeSessions.set(rideId, session);
       }
 
-      await this.pusher.trigger(channelName, 'driver:location-updated', locationData);
-      await this.pusher.trigger('admin-rides', 'driver:live-location', locationData);
+      await this.triggerEvent(channelName, 'driver:location-updated', locationData);
+      await this.triggerEvent('admin-rides', 'driver:live-location', locationData);
 
       return { success: true };
     } catch (error) {
@@ -260,12 +307,12 @@ class PusherService {
         timestamp: new Date()
       };
       
-      await this.pusher.trigger(channelName, 'ride:status-changed', statusData);
+      await this.triggerEvent(channelName, 'ride:status-changed', statusData);
       
       if (status === 'completed') {
         this.activeSessions.delete(rideId);
         
-        await this.pusher.trigger(channelName, 'ride:completed', {
+        await this.triggerEvent(channelName, 'ride:completed', {
           rideId,
           message: 'Ride completed successfully',
           timestamp: new Date()
@@ -299,7 +346,7 @@ class PusherService {
         message: 'Driver has arrived at pickup location'
       };
       
-      await this.pusher.trigger(channelName, 'driver:arrived', arrivalData);
+      await this.triggerEvent(channelName, 'driver:arrived', arrivalData);
       
       return { success: true };
     } catch (error) {
@@ -327,7 +374,7 @@ class PusherService {
         message: 'Ride has started'
       };
       
-      await this.pusher.trigger(channelName, 'ride:started', startData);
+      await this.triggerEvent(channelName, 'ride:started', startData);
       
       return { success: true };
     } catch (error) {
@@ -367,7 +414,7 @@ class PusherService {
         message: 'Ride completed successfully'
       };
       
-      await this.pusher.trigger(channelName, 'ride:completed', completeData);
+      await this.triggerEvent(channelName, 'ride:completed', completeData);
       
       this.activeSessions.delete(rideId);
       
@@ -378,26 +425,26 @@ class PusherService {
     }
   }
 
-  async handleDriverDisconnect(driverId, rideId) {
+  handleDriverDisconnect(driverId, rideId) {
     try {
       const session = this.activeSessions.get(rideId);
       if (session && session.driverId === driverId) {
         session.driverId = null;
         this.activeSessions.set(rideId, session);
         
-        await Driver.findByIdAndUpdate(driverId, {
+        Driver.findByIdAndUpdate(driverId, {
           isAvailable: false,
           isOnline: false,
           currentRide: null
-        });
+        }).catch(err => console.error('Error updating driver:', err));
         
         if (session.customerId) {
           const channelName = this.getRideChannel(rideId);
-          await this.pusher.trigger(channelName, 'driver:disconnected', {
+          this.triggerEvent(channelName, 'driver:disconnected', {
             driverId,
             rideId,
             message: 'Driver lost connection, reconnecting...'
-          });
+          }).catch(err => console.error('Error triggering event:', err));
         }
       }
     } catch (error) {
@@ -405,7 +452,7 @@ class PusherService {
     }
   }
 
-  async handleCustomerDisconnect(customerId, rideId) {
+  handleCustomerDisconnect(customerId, rideId) {
     try {
       const session = this.activeSessions.get(rideId);
       if (session && session.customerId === customerId) {
