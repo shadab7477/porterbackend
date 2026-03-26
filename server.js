@@ -1,12 +1,16 @@
 // server.js or index.js - Update your existing file
 import express from 'express';
 import http from 'http';
+import { Server } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 import connectDB from './config/database.js';
+import initializeSockets from './sockets/socketHandler.js';
+import { initializeSupportSockets } from './sockets/supportSocketHandler.js';
+import { initializeRideTrackingSockets } from './sockets/rideTrackingSocket.js'; // New file we'll create
 
 // Routes
 import driverRoutes from './routes/driverRoutes.js';
@@ -31,10 +35,32 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const server = http.createServer(app);
 
+// ✅ Socket.IO setup with enhanced configuration
+const io = new Server(server, {
+  cors: {
+    origin: process.env.CLIENT_URL || ["http://localhost:3000", "https://godelivo.com"],
+    methods: ["GET", "POST", "PATCH", "PUT", "DELETE"],
+    credentials: true
+  },
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  transports: ['websocket', 'polling']
+});
+
+// Store active connections globally
+global.activeDrivers = new Map(); // driverId -> socketId
+global.activeCustomers = new Map(); // customerId -> socketId
+global.activeRides = new Map(); // rideId -> { driverId, customerId, driverSocket, customerSocket }
 
 // DB connect
 connectDB();
 
+// Initialize all socket handlers
+initializeSockets(io);
+initializeSupportSockets(io);
+initializeRideTrackingSockets(io); // New ride tracking socket handler
+
+app.set('io', io);
 
 // ✅ Middlewares
 app.use(cors({
