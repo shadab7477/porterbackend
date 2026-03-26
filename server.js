@@ -1,3 +1,4 @@
+// server.js or index.js - Update your existing file
 import express from 'express';
 import http from 'http';
 import cors from 'cors';
@@ -6,7 +7,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import connectDB from './config/database.js';
-import pusherService from './services/pusherService.js';
 
 // Routes
 import driverRoutes from './routes/driverRoutes.js';
@@ -24,24 +24,19 @@ import walletRoutes from './routes/walletRoutes.js';
 
 dotenv.config();
 
+// ES module fix
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = http.createServer(app);
 
-// Store active connections globally
-global.activeDrivers = new Map();
-global.activeCustomers = new Map();
-global.activeRides = new Map();
 
 // DB connect
 connectDB();
 
-// Make pusher service available globally
-app.set('pusherService', pusherService);
 
-// Middlewares
+// ✅ Middlewares
 app.use(cors({
   origin: process.env.CLIENT_URL || ["http://localhost:3000", "https://godelivo.com"],
   credentials: true
@@ -50,14 +45,7 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Pusher authentication endpoint
-app.post('/pusher/auth', (req, res) => {
-  const { socket_id, channel_name } = req.body;
-  const auth = pusherService.authenticate(socket_id, channel_name);
-  res.send(auth);
-});
-
-// ================== API ROUTES ==================
+// ================== ✅ API ROUTES ==================
 app.use('/api/auth', authRoutes);
 app.use('/api/drivers', driverRoutes);
 app.use('/api/orders', orderRoutes);
@@ -76,14 +64,14 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// ================== REACT BUILD SERVE ==================
+// ================== ✅ REACT BUILD SERVE ==================
 app.use(express.static(path.join(__dirname, 'build')));
 
 app.get(/^\/(?!api).*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
-// ================== ERROR HANDLER ==================
+// ================== ✅ ERROR HANDLER ==================
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({
@@ -93,12 +81,12 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ================== SERVER START ==================
+// ================== ✅ SERVER START ==================
 const PORT = process.env.PORT || 5000;
 
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`⚡ Pusher ready`);
+  console.log(`⚡ Socket.IO ready`);
 });
 
-export { app, server };
+export { app, server, io };
