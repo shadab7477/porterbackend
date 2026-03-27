@@ -1,4 +1,3 @@
-// server.js or index.js - Update your existing file
 import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
@@ -10,7 +9,7 @@ import { fileURLToPath } from 'url';
 import connectDB from './config/database.js';
 import initializeSockets from './sockets/socketHandler.js';
 import { initializeSupportSockets } from './sockets/supportSocketHandler.js';
-import { initializeRideTrackingSockets } from './sockets/rideTrackingSocket.js'; // New file we'll create
+import { initializeRideTrackingSockets } from './sockets/rideTrackingSocket.js';
 
 // Routes
 import driverRoutes from './routes/driverRoutes.js';
@@ -47,18 +46,18 @@ const io = new Server(server, {
   transports: ['websocket', 'polling']
 });
 
-// Store active connections globally
-global.activeDrivers = new Map(); // driverId -> socketId
-global.activeCustomers = new Map(); // customerId -> socketId
-global.activeRides = new Map(); // rideId -> { driverId, customerId, driverSocket, customerSocket }
+// ✅ Initialize global maps for active connections
+global.activeDrivers = new Map(); // driverId -> { socketId, rideId, lastLocation, isOnline }
+global.activeCustomers = new Map(); // customerId -> { socketId, rideId }
+global.activeRides = new Map(); // rideId -> { driverId, customerId, driverSocketId, customerSocketId, lastLocation, status }
 
-// DB connect
+// ✅ Connect to database
 connectDB();
 
-// Initialize all socket handlers
+// ✅ Initialize all socket handlers
 initializeSockets(io);
 initializeSupportSockets(io);
-initializeRideTrackingSockets(io); // New ride tracking socket handler
+initializeRideTrackingSockets(io);
 
 app.set('io', io);
 
@@ -87,7 +86,13 @@ app.use('/api/wallet', walletRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ status: 'yeahhhhhhhhh godelivo', timestamp: new Date().toISOString(), name:"chalrha h bhai" });
+  res.json({ 
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    activeDrivers: global.activeDrivers.size,
+    activeCustomers: global.activeCustomers.size,
+    activeRides: global.activeRides.size
+  });
 });
 
 // ================== ✅ REACT BUILD SERVE ==================
@@ -113,6 +118,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`⚡ Socket.IO ready`);
+  console.log(`📊 Active connections tracking enabled`);
 });
 
 export { app, server, io };
