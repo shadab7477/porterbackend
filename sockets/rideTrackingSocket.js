@@ -1,7 +1,6 @@
 import Driver from '../models/Driver.js';
 import Ride from '../models/Ride.js';
 import Customer from '../models/Customer.js';
-import { sendPushNotification } from '../utils/notificationHelper.js';
 
 // Store active tracking sessions
 const activeTrackingSessions = new Map(); // rideId -> session object
