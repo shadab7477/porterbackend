@@ -1,3 +1,4 @@
+// sockets/rideTrackingSocket.js
 import Driver from '../models/Driver.js';
 import Ride from '../models/Ride.js';
 import Customer from '../models/Customer.js';
@@ -52,6 +53,7 @@ export const initializeRideTrackingSockets = (io) => {
         socket.driverId = driverId;
         socket.rideId = rideId;
         socket.userType = 'driver';
+        socket.joinedTracking = true;
         
         // Join ride-specific room
         socket.join(`ride:${rideId}`);
@@ -67,8 +69,9 @@ export const initializeRideTrackingSockets = (io) => {
             lastLocation: null,
             driverId: driverId,
             customerId: null,
+            driverConnected: true,
             startedAt: new Date(),
-            events: [] // For tracking event history
+            events: []
           };
           activeTrackingSessions.set(rideId, session);
         } else {
@@ -78,10 +81,11 @@ export const initializeRideTrackingSockets = (io) => {
           });
           session.driverSocketId = socket.id;
           session.driverId = driverId;
+          session.driverConnected = true;
           activeTrackingSessions.set(rideId, session);
         }
         
-        // Update global active drivers map
+        // Update global active drivers map - CRITICAL FIX
         const existingDriver = global.activeDrivers.get(driverId);
         logWithTimestamp('debug', `Updating global active drivers map`, {
           driverId,
@@ -94,10 +98,20 @@ export const initializeRideTrackingSockets = (io) => {
           rideId: rideId,
           lastLocation: null,
           isOnline: true,
+          isAvailable: false,
+          joinedAt: new Date(),
           lastUpdate: new Date()
         });
         
-        // Update driver status in database
+        // Verify driver was added
+        const verifyDriver = global.activeDrivers.get(driverId);
+        logWithTimestamp('debug', `Driver added to global map verification`, {
+          driverId,
+          inMap: !!verifyDriver,
+          socketId: verifyDriver?.socketId
+        });
+        
+        // Update driver status in database with socket ID
         logWithTimestamp('info', `Updating driver in database`, { driverId, rideId });
         const updatedDriver = await Driver.findByIdAndUpdate(driverId, {
           socketId: socket.id,
@@ -110,6 +124,7 @@ export const initializeRideTrackingSockets = (io) => {
         logWithTimestamp('debug', `Driver database update result`, {
           driverId,
           updated: !!updatedDriver,
+          socketIdSaved: updatedDriver?.socketId,
           isOnline: updatedDriver?.isOnline,
           isAvailable: updatedDriver?.isAvailable,
           currentRideId: updatedDriver?.currentRideId
@@ -228,11 +243,11 @@ export const initializeRideTrackingSockets = (io) => {
         
         logWithTimestamp('info', `👤 Customer ${customerId} joined tracking for ride ${rideId}`);
         
-        // Get ride details with populated data
+        // Get ride details with populated data - FIX: use findOne with rideId
         logWithTimestamp('debug', `Fetching ride details from database`, { rideId });
-        const ride = await Ride.findById(rideId)
+        const ride = await Ride.findOne({ rideId: rideId })
           .populate('driver.driverId', 'name phone email profileImage vehicleType vehicleNumber rating')
-          .populate('customerId', 'name phone email profileImage');
+          .populate('customer.customerId', 'name phone email profileImage');
         
         if (!ride) {
           logWithTimestamp('error', `Ride not found in database`, { rideId });
@@ -241,11 +256,12 @@ export const initializeRideTrackingSockets = (io) => {
         }
         
         logWithTimestamp('debug', `Ride details retrieved`, {
-          rideId: ride._id,
+          rideId: ride.rideId,
+          mongoId: ride._id,
           status: ride.status,
           hasDriver: !!ride.driver,
           driverId: ride.driver?.driverId?._id,
-          hasCustomer: !!ride.customerId
+          hasCustomer: !!ride.customer
         });
         
         // Send initial ride info
@@ -254,7 +270,7 @@ export const initializeRideTrackingSockets = (io) => {
           rideId,
           userType: 'customer',
           rideDetails: {
-            rideId: ride._id,
+            rideId: ride.rideId,
             pickupLocation: ride.pickupLocation,
             dropLocation: ride.dropLocation,
             status: ride.status,
@@ -270,7 +286,7 @@ export const initializeRideTrackingSockets = (io) => {
               vehicleNumber: ride.driver.driverId?.vehicleNumber,
               rating: ride.driver.driverId?.rating
             } : null,
-            customer: ride.customerId
+            customer: ride.customer
           },
           timestamp: new Date()
         };
@@ -359,7 +375,8 @@ export const initializeRideTrackingSockets = (io) => {
         bearing,
         speed,
         accuracy,
-        socketId: socket.id
+        socketId: socket.id,
+        hasJoinedTracking: socket.joinedTracking
       });
       
       try {
@@ -383,40 +400,70 @@ export const initializeRideTrackingSockets = (io) => {
           logWithTimestamp('error', `Error updating driver location in DB:`, err);
         });
         
-        // Update global active drivers map
-        const driverData = global.activeDrivers.get(driverId);
-        if (driverData) {
-          const previousLocation = driverData.lastLocation;
+        // Update global active drivers map - AUTO-ADD IF MISSING
+        let driverData = global.activeDrivers.get(driverId);
+        if (!driverData) {
+          logWithTimestamp('warning', `Driver not found in global active drivers map, auto-adding now`, { driverId });
+          driverData = {
+            socketId: socket.id,
+            rideId: rideId,
+            lastLocation: { latitude, longitude, bearing, speed },
+            isOnline: true,
+            isAvailable: false,
+            autoAdded: true,
+            lastUpdate: new Date()
+          };
+          global.activeDrivers.set(driverId, driverData);
+          logWithTimestamp('debug', `Driver auto-added to global map`, { driverId });
+        } else {
           driverData.lastLocation = { latitude, longitude, bearing, speed };
           driverData.lastUpdate = new Date();
           global.activeDrivers.set(driverId, driverData);
           
           logWithTimestamp('debug', `Updated global active drivers map`, {
             driverId,
-            previousLocation,
-            newLocation: driverData.lastLocation
+            lastLocation: driverData.lastLocation
           });
-        } else {
-          logWithTimestamp('warning', `Driver not found in global active drivers map`, { driverId });
         }
         
-        // Get ride and calculate ETA
+        // ========== CRITICAL FIX: Find ride by custom rideId field ==========
         let ride;
         try {
-          ride = await Ride.findById(rideId);
+          // FIRST: Try to find by custom rideId field (string like "RID89939650165")
+          ride = await Ride.findOne({ rideId: rideId });
+          
           if (!ride) {
-            // If ID is invalid, try to find by custom rideId field
-            ride = await Ride.findOne({ rideId: rideId });
+            // SECOND: If not found, try to find by MongoDB _id (fallback)
+            try {
+              ride = await Ride.findById(rideId);
+            } catch (err) {
+              logWithTimestamp('debug', `Ride not found by _id, using custom rideId only`);
+            }
           }
         } catch (err) {
-          logWithTimestamp('error', `Error finding ride`, { rideId, error: err.message });
+          logWithTimestamp('error', `Error finding ride:`, { rideId, error: err.message });
           ride = await Ride.findOne({ rideId: rideId });
         }
         
         if (!ride) {
           logWithTimestamp('warning', `Ride not found for location update`, { rideId });
+          // Still broadcast location even if ride not found
+          io.to(`ride:${rideId}`).emit('driver:location-updated', {
+            driverId,
+            latitude,
+            longitude,
+            rideId,
+            timestamp: new Date()
+          });
           return;
         }
+        
+        logWithTimestamp('debug', `Found ride for location update`, {
+          rideId: ride.rideId,
+          mongoId: ride._id,
+          status: ride.status,
+          pickupCoordinates: ride.pickupLocation?.coordinates
+        });
         
         let eta = null;
         let etaMinutes = null;
@@ -431,7 +478,7 @@ export const initializeRideTrackingSockets = (io) => {
           if (ride.pickupLocation && ride.pickupLocation.coordinates) {
             const [pickupLon, pickupLat] = ride.pickupLocation.coordinates;
             const distanceToPickup = calculateDistance(latitude, longitude, pickupLat, pickupLon);
-            const speedKmh = getAverageSpeed(ride.vehicleType || ride.driver?.vehicleType);
+            const speedKmh = getAverageSpeed(ride.driver?.vehicleType || ride.vehicleType);
             etaMinutes = Math.ceil((distanceToPickup / speedKmh) * 60);
             eta = etaMinutes;
             remainingDistance = distanceToPickup;
@@ -467,7 +514,7 @@ export const initializeRideTrackingSockets = (io) => {
           if (ride.dropLocation && ride.dropLocation.coordinates) {
             const [dropLon, dropLat] = ride.dropLocation.coordinates;
             const distanceToDrop = calculateDistance(latitude, longitude, dropLat, dropLon);
-            const speedKmh = getAverageSpeed(ride.vehicleType || ride.driver?.vehicleType);
+            const speedKmh = getAverageSpeed(ride.driver?.vehicleType || ride.vehicleType);
             etaMinutes = Math.ceil((distanceToDrop / speedKmh) * 60);
             eta = etaMinutes;
             remainingDistance = distanceToDrop;
@@ -533,9 +580,22 @@ export const initializeRideTrackingSockets = (io) => {
         
         logWithTimestamp('debug', `Prepared location data for broadcast`, locationData);
         
-        // Store last location in session
-        const session = activeTrackingSessions.get(rideId);
-        if (session) {
+        // Store last location in session - CREATE IF MISSING
+        let session = activeTrackingSessions.get(rideId);
+        if (!session) {
+          logWithTimestamp('warning', `No tracking session found for ride ${rideId}, creating one`);
+          session = {
+            driverSocketId: socket.id,
+            customerSocketId: null,
+            lastLocation: locationData,
+            driverId: driverId,
+            customerId: null,
+            driverConnected: true,
+            startedAt: new Date()
+          };
+          activeTrackingSessions.set(rideId, session);
+          logWithTimestamp('debug', `Created new tracking session during location update`, { rideId });
+        } else {
           const previousLocation = session.lastLocation;
           session.lastLocation = locationData;
           activeTrackingSessions.set(rideId, session);
@@ -544,8 +604,6 @@ export const initializeRideTrackingSockets = (io) => {
             rideId,
             hadPreviousLocation: !!previousLocation
           });
-        } else {
-          logWithTimestamp('warning', `No tracking session found for ride ${rideId}`);
         }
         
         // Update global ride tracking
@@ -561,9 +619,10 @@ export const initializeRideTrackingSockets = (io) => {
         logWithTimestamp('debug', `Broadcast location to ride room: ride:${rideId}`);
         
         // Also emit specifically to customer if we have their socket ID
-        if (session && session.customerSocketId) {
-          io.to(session.customerSocketId).emit('driver:location-updated', locationData);
-          logWithTimestamp('debug', `Emitted location directly to customer socket: ${session.customerSocketId}`);
+        const currentSession = activeTrackingSessions.get(rideId);
+        if (currentSession && currentSession.customerSocketId) {
+          io.to(currentSession.customerSocketId).emit('driver:location-updated', locationData);
+          logWithTimestamp('debug', `Emitted location directly to customer socket: ${currentSession.customerSocketId}`);
         }
         
         // Broadcast to admin monitoring room
@@ -653,6 +712,7 @@ export const initializeRideTrackingSockets = (io) => {
         const updatedDriver = await Driver.findByIdAndUpdate(driverId, {
           isOnline: isOnline,
           isAvailable: isAvailable,
+          socketId: isOnline ? socket.id : null,
           lastOnlineAt: isOnline ? new Date() : null,
           ...(isAvailable ? { currentRideId: null } : {})
         }, { new: true });
@@ -668,10 +728,19 @@ export const initializeRideTrackingSockets = (io) => {
         const driverData = global.activeDrivers.get(driverId);
         if (driverData) {
           driverData.isOnline = isOnline;
+          driverData.isAvailable = isAvailable;
           global.activeDrivers.set(driverId, driverData);
           logWithTimestamp('debug', `Updated global active drivers map`, { driverId, isOnline });
-        } else {
-          logWithTimestamp('warning', `Driver not in global active drivers map`, { driverId });
+        } else if (isOnline) {
+          global.activeDrivers.set(driverId, {
+            socketId: socket.id,
+            rideId: rideId,
+            lastLocation: null,
+            isOnline: isOnline,
+            isAvailable: isAvailable,
+            lastUpdate: new Date()
+          });
+          logWithTimestamp('debug', `Added driver to global map`, { driverId });
         }
         
         const statusData = {
@@ -710,9 +779,10 @@ export const initializeRideTrackingSockets = (io) => {
       try {
         const { rideId, status, driverId, location, reason } = data;
         
-        // Update ride in database
+        // FIX: Update ride using findOne with custom rideId
         logWithTimestamp('debug', `Fetching ride for status update`, { rideId });
-        const ride = await Ride.findById(rideId);
+        const ride = await Ride.findOne({ rideId: rideId });
+        
         if (!ride) {
           logWithTimestamp('error', `Ride not found for status update`, { rideId });
           socket.emit('error', { message: 'Ride not found' });
@@ -720,7 +790,8 @@ export const initializeRideTrackingSockets = (io) => {
         }
         
         logWithTimestamp('debug', `Current ride status: ${ride.status}, updating to: ${status}`, {
-          rideId,
+          rideId: ride.rideId,
+          mongoId: ride._id,
           oldStatus: ride.status,
           newStatus: status
         });
@@ -756,10 +827,10 @@ export const initializeRideTrackingSockets = (io) => {
         }
         
         await ride.save();
-        logWithTimestamp('debug', `Ride status updated in database`, { rideId, status });
+        logWithTimestamp('debug', `Ride status updated in database`, { rideId: ride.rideId, status });
         
         const statusData = {
-          rideId,
+          rideId: ride.rideId,
           status,
           driverId,
           location,
@@ -863,9 +934,9 @@ export const initializeRideTrackingSockets = (io) => {
         
         logWithTimestamp('debug', `Processing driver arrival`, { rideId, driverId, location });
         
-        // Update ride status
-        const ride = await Ride.findByIdAndUpdate(
-          rideId,
+        // FIX: Update ride using findOne with custom rideId
+        const ride = await Ride.findOneAndUpdate(
+          { rideId: rideId },
           {
             status: 'driver_arrived',
             driverArrivedAt: new Date()
@@ -879,7 +950,7 @@ export const initializeRideTrackingSockets = (io) => {
           return;
         }
         
-        logWithTimestamp('debug', `Ride status updated to driver_arrived`, { rideId });
+        logWithTimestamp('debug', `Ride status updated to driver_arrived`, { rideId: ride.rideId });
         
         const arrivalData = {
           rideId,
@@ -935,8 +1006,9 @@ export const initializeRideTrackingSockets = (io) => {
         
         logWithTimestamp('debug', `Processing ride start`, { rideId, driverId });
         
-        const ride = await Ride.findByIdAndUpdate(
-          rideId,
+        // FIX: Update ride using findOne with custom rideId
+        const ride = await Ride.findOneAndUpdate(
+          { rideId: rideId },
           {
             status: 'in_progress',
             rideStartedAt: new Date()
@@ -950,7 +1022,7 @@ export const initializeRideTrackingSockets = (io) => {
           return;
         }
         
-        logWithTimestamp('debug', `Ride status updated to in_progress`, { rideId });
+        logWithTimestamp('debug', `Ride status updated to in_progress`, { rideId: ride.rideId });
         
         const startData = {
           rideId,
@@ -1009,9 +1081,9 @@ export const initializeRideTrackingSockets = (io) => {
           tip
         });
         
-        // Update ride
-        const ride = await Ride.findByIdAndUpdate(
-          rideId,
+        // FIX: Update ride using findOne with custom rideId
+        const ride = await Ride.findOneAndUpdate(
+          { rideId: rideId },
           {
             status: 'completed',
             rideCompletedAt: new Date(),
@@ -1028,7 +1100,7 @@ export const initializeRideTrackingSockets = (io) => {
           return;
         }
         
-        logWithTimestamp('debug', `Ride status updated to completed`, { rideId });
+        logWithTimestamp('debug', `Ride status updated to completed`, { rideId: ride.rideId });
         
         // Update driver stats
         const updatedDriver = await Driver.findByIdAndUpdate(driverId, {
@@ -1119,6 +1191,7 @@ export const initializeRideTrackingSockets = (io) => {
           const reconnectAttempts = (session.driverReconnectAttempts || 0) + 1;
           session.driverSocketId = null;
           session.driverReconnectAttempts = reconnectAttempts;
+          session.driverConnected = false;
           activeTrackingSessions.set(socket.rideId, session);
           
           logWithTimestamp('warning', `Driver disconnected during active ride`, {
