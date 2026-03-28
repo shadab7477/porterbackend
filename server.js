@@ -1,4 +1,4 @@
-// server.js or index.js - Updated with production-ready configuration
+// server.js
 import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
@@ -35,35 +35,21 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const server = http.createServer(app);
 
-// ✅ Enhanced Socket.IO configuration for production
+// Socket.IO configuration
 const io = new Server(server, {
   cors: {
     origin: [
-      process.env.CLIENT_URL || "http://localhost:3000",
       "https://godelivo.com",
-      "http://godelivo.com",
       "https://www.godelivo.com",
-      "http://www.godelivo.com"
+      "http://godelivo.com",
+      "http://localhost:3000"
     ],
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE"],
-    credentials: true,
-    allowedHeaders: ["Content-Type", "Authorization"]
+    credentials: true
   },
-  // Critical settings for VPS
-  path: '/socket.io/',  // Default path, ensure this matches client
-  transports: ['websocket', 'polling'],  // Allow both, websocket preferred
-  allowEIO3: true,  // Allow Engine.IO v3 clients
   pingTimeout: 60000,
   pingInterval: 25000,
-  upgradeTimeout: 10000,
-  maxHttpBufferSize: 1e6,  // 1 MB
-  // For production behind proxy (nginx)
-  serveClient: false,  // Don't serve client file
-  // Connection state recovery
-  connectionStateRecovery: {
-    maxDisconnectionDuration: 2 * 60 * 1000,  // 2 minutes
-    skipMiddlewares: true,
-  }
+  transports: ['websocket', 'polling']
 });
 
 // Initialize global maps
@@ -71,38 +57,35 @@ global.activeDrivers = new Map();
 global.activeCustomers = new Map();
 global.activeRides = new Map();
 
-// DB connect
+// Connect to database
 connectDB();
 
-// Initialize all socket handlers
+// Initialize socket handlers\
+initializeRideTrackingSockets(io);
+
 initializeSockets(io);
 initializeSupportSockets(io);
-initializeRideTrackingSockets(io);
 
 app.set('io', io);
 
-// ✅ Enhanced CORS for production
+// Middleware
 app.use(cors({
   origin: [
-    process.env.CLIENT_URL || "http://localhost:3000",
     "https://godelivo.com",
-    "http://godelivo.com",
     "https://www.godelivo.com",
-    "http://www.godelivo.com"
+    "http://godelivo.com",
+    "http://localhost:3000"
   ],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  credentials: true
 }));
 
-// ✅ Body parsing with increased limits
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// ✅ Trust proxy - IMPORTANT for VPS behind reverse proxy
-app.set('trust proxy', 1);  // Trust first proxy (like nginx)
+// Trust proxy (important for Nginx)
+app.set('trust proxy', 1);
 
-// ================== ✅ API ROUTES ==================
+// ================== API ROUTES ==================
 app.use('/api/auth', authRoutes);
 app.use('/api/drivers', driverRoutes);
 app.use('/api/orders', orderRoutes);
@@ -116,17 +99,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/wallet', walletRoutes);
 
-// ✅ Socket.IO connection test endpoint
-app.get('/socket-test', (req, res) => {
-  res.json({ 
-    status: 'Socket.IO ready', 
-    path: io.path(),
-    transports: io.engine?.transports || ['websocket', 'polling'],
-    activeConnections: io.engine?.clientsCount || 0
-  });
-});
-
-// Health check with detailed info
+// Health check
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy', 
@@ -139,14 +112,26 @@ app.get('/health', (req, res) => {
   });
 });
 
-// ================== ✅ REACT BUILD SERVE ==================
+// Socket.IO test endpoint
+app.get('/socket-test', (req, res) => {
+  res.json({ 
+    status: 'Socket.IO ready', 
+    path: io.path(),
+    transports: ['websocket', 'polling'],
+    activeConnections: io.engine?.clientsCount || 0
+  });
+});
+
+// ================== SERVE REACT BUILD ==================
+// Serve static files from the React build folder
 app.use(express.static(path.join(__dirname, 'build')));
 
-app.get(/^\/(?!api|socket-test|health).*/, (req, res) => {
+// Handle React routing - serve index.html for any non-API route
+app.get(/^\/(?!api|health|socket-test).*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
-// ================== ✅ ERROR HANDLER ==================
+// ================== ERROR HANDLER ==================
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({
@@ -156,15 +141,15 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ================== ✅ SERVER START ==================
-const PORT = process.env.PORT || 5000;
+// ================== SERVER START ==================
+const PORT = process.env.PORT || 5001;
 
-server.listen(PORT, '0.0.0.0', () => {  // Listen on all interfaces
+// Listen on localhost only (Nginx will proxy)
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📡 Server address: ${process.env.SERVER_URL || `http://localhost:${PORT}`}`);
-  console.log(`⚡ Socket.IO path: ${io.path()}`);
-  console.log(`🔌 Socket.IO transports: ${io.engine?.transports?.join(', ') || 'websocket, polling'}`);
-  console.log(`🌐 CORS enabled for: ${process.env.CLIENT_URL || 'http://localhost:3000, https://godelivo.com'}`);
+  console.log(`📡 Listening on: http://127.0.0.1:${PORT}`);
+  console.log(`⚡ Socket.IO ready`);
+  console.log(`📦 Serving React build from: ${path.join(__dirname, 'build')}`);
 });
 
 export { app, server, io };
