@@ -1369,6 +1369,146 @@ function getStatusMessage(status) {
   
   return message;
 }
+// Add to the socket.on('connection') block
 
+// ==================== SIMPLE CHAT ====================
+
+/**
+ * User joins chat for a ride
+ */
+socket.on('chat:join', (data) => {
+  try {
+    const { rideId, userId, userType } = data;
+    
+    if (!rideId || !userId) {
+      socket.emit('error', { message: 'Ride ID and User ID required' });
+      return;
+    }
+    
+    // Store chat info on socket
+    socket.chatRideId = rideId;
+    socket.chatUserId = userId;
+    socket.chatUserType = userType;
+    
+    // Join user room for direct messages
+    const userRoom = `${userType}:${userId}`;
+    socket.join(userRoom);
+    logWithTimestamp('debug', `User joined chat: ${userRoom}`);
+    
+    // Join ride chat room
+    socket.join(`chat:${rideId}`);
+    logWithTimestamp('debug', `User joined chat room: chat:${rideId}`);
+    
+    // Send confirmation
+    socket.emit('chat:joined', {
+      success: true,
+      rideId,
+      message: 'Joined chat successfully'
+    });
+    
+  } catch (error) {
+    logWithTimestamp('error', `Error joining chat:`, error);
+    socket.emit('error', { message: error.message });
+  }
+});
+
+/**
+ * User leaves chat
+ */
+socket.on('chat:leave', (data) => {
+  try {
+    if (socket.chatRideId) {
+      // Leave rooms
+      socket.leave(`chat:${socket.chatRideId}`);
+      socket.leave(`${socket.chatUserType}:${socket.chatUserId}`);
+      
+      // Clear data
+      delete socket.chatRideId;
+      delete socket.chatUserId;
+      delete socket.chatUserType;
+    }
+    
+    socket.emit('chat:left', { success: true });
+    
+  } catch (error) {
+    logWithTimestamp('error', `Error leaving chat:`, error);
+  }
+});
+
+/**
+ * Send message via socket
+ */
+socket.on('chat:send_message', async (data) => {
+  try {
+    const { rideId, message } = data;
+    const userId = socket.chatUserId;
+    const userType = socket.chatUserType;
+    
+    if (!rideId || !message) {
+      socket.emit('error', { message: 'Ride ID and message required' });
+      return;
+    }
+    
+    // Get ride details
+    const ride = await Ride.findOne({ rideId: rideId });
+    if (!ride) {
+      socket.emit('error', { message: 'Ride not found' });
+      return;
+    }
+    
+    // Determine receiver
+    let senderName, receiverId, receiverType;
+    
+    if (userType === 'driver') {
+      senderName = ride.driver.name;
+      receiverId = ride.customer.customerId;
+      receiverType = 'customer';
+    } else {
+      senderName = ride.customer.name;
+      receiverId = ride.driver.driverId;
+      receiverType = 'driver';
+    }
+    
+    // Save to database
+    const chatMessage = new ChatMessage({
+      rideId,
+      senderId: userId,
+      senderType: userType,
+      senderName,
+      receiverId,
+      receiverType,
+      message
+    });
+    
+    await chatMessage.save();
+    
+    // Prepare message data
+    const messageData = {
+      _id: chatMessage._id,
+      rideId,
+      senderId: userId,
+      senderType: userType,
+      senderName,
+      message,
+      createdAt: chatMessage.createdAt
+    };
+    
+    // Send to receiver's personal room
+    const receiverRoom = `${receiverType}:${receiverId}`;
+    io.to(receiverRoom).emit('chat:new_message', messageData);
+    
+    // Also send to ride chat room
+    io.to(`chat:${rideId}`).emit('chat:new_message', messageData);
+    
+    logWithTimestamp('debug', `Chat message sent: ${rideId}`, {
+      from: userType,
+      message: message.substring(0, 50)
+    });
+    
+  } catch (error) {
+    logWithTimestamp('error', `Error sending message:`, error);
+    socket.emit('error', { message: error.message });
+  }
+});
 // Export for use in other files
 export { calculateDistance, getAverageSpeed, getStatusMessage };
