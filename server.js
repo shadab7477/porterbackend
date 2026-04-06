@@ -27,6 +27,7 @@ import notificationRoutes from './routes/notificationRoutes.js';
 import walletRoutes from './routes/walletRoutes.js';
 
 import chatRoutes from './routes/chatRoutes.js';
+import shiftingRoutes from './routes/shiftingRoutes.js';
 dotenv.config();
 
 // ES module fix
@@ -101,6 +102,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/wallet', walletRoutes);
 
 app.use('/api/chat', chatRoutes);
+app.use('/api/shifting', shiftingRoutes);
 // Health check
 app.get('/health', (req, res) => {
   res.json({ 
