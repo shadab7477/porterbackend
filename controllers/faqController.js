@@ -27,11 +27,18 @@ export const getAllFAQs = async (req, res) => {
 // ADMIN: Create FAQ
 export const createFAQ = async (req, res) => {
   try {
-    const { question, answer, category, order, isPublished } = req.body;
+    const { question, answer, category, subcategory, order, isPublished } = req.body;
     if (!question || !answer || !category) {
       return res.status(400).json({ success: false, message: 'Question, answer and category are required' });
     }
-    const faq = await FAQ.create({ question, answer, category, order: order || 0, isPublished: isPublished !== false });
+    const faq = await FAQ.create({
+      question,
+      answer,
+      category,
+      subcategory: subcategory || '',
+      order: order || 0,
+      isPublished: isPublished !== false
+    });
     res.status(201).json({ success: true, data: faq, message: 'FAQ created successfully' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
