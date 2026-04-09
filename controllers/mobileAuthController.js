@@ -56,7 +56,7 @@ export const sendOtp = async (req, res) => {
 
 export const verifyOtp = async (req, res) => {
   try {
-    const { mobile, otp } = req.body;
+    const { mobile, otp, fcmToken } = req.body;
 
     if (!mobile || !otp) {
       return res.status(400).json({
@@ -75,7 +75,7 @@ export const verifyOtp = async (req, res) => {
       });
     }
 
-    // Check max attempts
+    // Max attempts check
     if (otpRecord.attempts >= MAX_OTP_ATTEMPTS) {
       await OTP.deleteOne({ mobile });
       return res.status(400).json({
@@ -98,7 +98,7 @@ export const verifyOtp = async (req, res) => {
       });
     }
 
-    // Mark OTP as verified
+    // ✅ OTP verified
     otpRecord.isVerified = true;
     await otpRecord.save();
 
@@ -115,13 +115,18 @@ export const verifyOtp = async (req, res) => {
       customer.isVerified = true;
     }
 
+    // ✅ Save / Update FCM Token
+    if (fcmToken) {
+      customer.fcmToken = fcmToken;
+    }
+
     customer.lastLogin = new Date();
     await customer.save();
 
-    // Generate JWT token
+    // Generate JWT
     const token = customer.generateAuthToken();
 
-    // Delete OTP after successful verification
+    // Delete OTP
     await OTP.deleteOne({ mobile });
 
     res.json({
@@ -138,6 +143,7 @@ export const verifyOtp = async (req, res) => {
         }
       }
     });
+
   } catch (error) {
     console.error('Verify OTP error:', error);
     res.status(500).json({
