@@ -428,6 +428,8 @@ async function processRides(pendingRides, driver, driverId, driverLat, driverLon
           address: ride.dropLocation.address || 'Drop location',
           coordinates: ride.dropLocation.coordinates
         },
+        dropLocations: ride.dropLocations || [],
+        totalStops: ride.dropLocations?.length || 1,
         rideDetails: {
           distance: ride.distance,
           distanceText: ride.routeInfo?.distanceText || `${ride.distance} km`,
@@ -437,7 +439,8 @@ async function processRides(pendingRides, driver, driverId, driverLat, driverLon
           fareBreakdown: {
             distanceFare: ride.fare?.distanceFare || 0,
             total: ride.fare?.total || 0
-          }
+          },
+          legDistances: ride.legDistances || []
         },
         requestedAt: ride.requestedAt,
         requestedTime: formatRelativeTime(ride.requestedAt),
@@ -494,13 +497,14 @@ async function processRides(pendingRides, driver, driverId, driverLat, driverLon
 
 // ==================== RIDE REQUEST FLOW FUNCTIONS ====================
 
-// 1. Customer requests a ride - UPDATED with simplified fare
+// 1. Customer requests a ride - UPDATED with multi-drop location support (max 4 drops)
 export const requestRide = async (req, res) => {
   try {
     const customerId = req.customerId;
     const {
       pickupLocation,
-      dropLocation,
+      dropLocation,      // single drop (backward compatibility)
+      dropLocations,     // array of drops (multi-drop)
       vehicleType = 'car',
       paymentMethod = 'cash',
       receiver
@@ -521,27 +525,86 @@ export const requestRide = async (req, res) => {
       });
     }
 
-    if (!pickupLocation?.coordinates || !dropLocation?.coordinates) {
+    // Build the drop locations array - support both single and multi-drop
+    let allDropLocations = [];
+    if (dropLocations && Array.isArray(dropLocations) && dropLocations.length > 0) {
+      allDropLocations = dropLocations;
+    } else if (dropLocation?.coordinates) {
+      allDropLocations = [dropLocation];
+    }
+
+    if (!pickupLocation?.coordinates || allDropLocations.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide pickup and drop locations with coordinates'
+        message: 'Please provide pickup location and at least one drop location with coordinates'
       });
     }
 
+    // Validate max 4 drop locations
+    if (allDropLocations.length > 4) {
+      return res.status(400).json({
+        success: false,
+        message: 'Maximum 4 drop locations allowed'
+      });
+    }
+
+    // Validate all drop locations have coordinates
+    for (let i = 0; i < allDropLocations.length; i++) {
+      if (!allDropLocations[i]?.coordinates || allDropLocations[i].coordinates.length < 2) {
+        return res.status(400).json({
+          success: false,
+          message: `Drop location ${i + 1} is missing coordinates`
+        });
+      }
+    }
+
     const [pickupLon, pickupLat] = pickupLocation.coordinates;
-    const [dropLon, dropLat] = dropLocation.coordinates;
 
-    const routeInfo = await calculateDistanceAndDuration(
-      pickupLat, pickupLon,
-      dropLat, dropLon,
-      vehicleType
-    );
+    // Calculate leg-by-leg distances sequentially
+    const legDistances = [];
+    let totalDistance = 0;
+    let totalDuration = 0;
+    let prevLat = pickupLat;
+    let prevLon = pickupLon;
 
-    const distance = routeInfo.distance;
-    const duration = routeInfo.duration;
-    
-    // UPDATED: Calculate fare using simplified method (no duration, no peak hour)
-    const fare = Ride.calculateFare(distance, vehicleType);
+    for (let i = 0; i < allDropLocations.length; i++) {
+      const [dropLon, dropLat] = allDropLocations[i].coordinates;
+      const legInfo = await calculateDistanceAndDuration(
+        prevLat, prevLon,
+        dropLat, dropLon,
+        vehicleType
+      );
+
+      legDistances.push({
+        from: i === 0 ? 'pickup' : `drop_${i}`,
+        to: `drop_${i + 1}`,
+        distance: legInfo.distance,
+        duration: legInfo.duration,
+        distanceText: legInfo.distanceText,
+        durationText: legInfo.durationText
+      });
+
+      totalDistance += legInfo.distance;
+      totalDuration += legInfo.duration;
+      prevLat = dropLat;
+      prevLon = dropLon;
+    }
+
+    totalDistance = parseFloat(totalDistance.toFixed(2));
+
+    // Calculate fare based on total cumulative distance
+    const fare = Ride.calculateFare(totalDistance, vehicleType);
+
+    // The final/last drop location for backward compatibility
+    const finalDrop = allDropLocations[allDropLocations.length - 1];
+    const [finalDropLon, finalDropLat] = finalDrop.coordinates;
+
+    // Build dropLocations array for storage
+    const formattedDropLocations = allDropLocations.map((loc, idx) => ({
+      type: 'Point',
+      coordinates: [parseFloat(loc.coordinates[0]), parseFloat(loc.coordinates[1])],
+      address: loc.address || `Drop location ${idx + 1}`
+    }));
 
     const ride = new Ride({
       customer: {
@@ -556,20 +619,26 @@ export const requestRide = async (req, res) => {
       },
       pickupLocation: {
         type: 'Point',
-        coordinates: [pickupLon, pickupLat],
+        coordinates: [parseFloat(pickupLon), parseFloat(pickupLat)],
         address: pickupLocation.address || 'Pickup location'
       },
+      // Last drop for backward compatibility
       dropLocation: {
         type: 'Point',
-        coordinates: [dropLon, dropLat],
-        address: dropLocation.address || 'Drop location'
+        coordinates: [parseFloat(finalDropLon), parseFloat(finalDropLat)],
+        address: finalDrop.address || 'Drop location'
       },
-      distance,
-      duration,
+      // All drop locations
+      dropLocations: formattedDropLocations,
+      // Leg-by-leg distance breakdown
+      legDistances,
+      currentDropIndex: 0,
+      distance: totalDistance,
+      duration: totalDuration,
       routeInfo: {
-        distanceText: routeInfo.distanceText,
-        durationText: routeInfo.durationText,
-        durationInTrafficText: routeInfo.durationInTrafficText
+        distanceText: `${totalDistance.toFixed(1)} km`,
+        durationText: `${totalDuration} mins`,
+        durationInTrafficText: `${totalDuration} mins`
       },
       fare: {
         distanceFare: fare.distanceFare,
@@ -588,7 +657,9 @@ export const requestRide = async (req, res) => {
       rideId: ride.rideId,
       customerId,
       pickupLocation: ride.pickupLocation,
-      dropLocation: ride.dropLocation
+      dropLocation: ride.dropLocation,
+      dropLocations: ride.dropLocations,
+      totalStops: ride.dropLocations.length
     });
 
     findNearbyDrivers(ride, req.app.get('io'));
@@ -601,13 +672,25 @@ export const requestRide = async (req, res) => {
         status: ride.status,
         pickupLocation: ride.pickupLocation,
         dropLocation: ride.dropLocation,
+        dropLocations: ride.dropLocations,
+        legDistances: ride.legDistances,
+        totalStops: ride.dropLocations.length,
         receiver: ride.receiver,
         distance: ride.distance,
-        distanceText: routeInfo.distanceText,
+        distanceText: `${totalDistance.toFixed(1)} km`,
         duration: ride.duration,
-        durationText: routeInfo.durationText,
+        durationText: `${totalDuration} mins`,
         fare: ride.fare,
-        fareBreakdown: fare.breakdown,
+        fareBreakdown: {
+          ...fare.breakdown,
+          legs: legDistances.map((leg, idx) => ({
+            leg: `${leg.from} → ${leg.to}`,
+            distance: leg.distanceText,
+            duration: leg.durationText
+          })),
+          totalDistance: `${totalDistance.toFixed(1)} km`,
+          totalFare: `₹${fare.total}`
+        },
         paymentMethod: ride.paymentMethod
       }
     });
@@ -683,6 +766,8 @@ const findNearbyDrivers = async (ride, io, radius = 5) => {
         rideId: ride.rideId,
         pickupLocation: ride.pickupLocation,
         dropLocation: ride.dropLocation,
+        dropLocations: ride.dropLocations || [],
+        totalStops: ride.dropLocations?.length || 1,
         distance: ride.distance,
         distanceText: ride.routeInfo.distanceText,
         estimatedFare: ride.fare.total,
@@ -887,6 +972,9 @@ const ride = await Ride.findOne({
         },
         pickupLocation: ride.pickupLocation,
         dropLocation: ride.dropLocation,
+        dropLocations: ride.dropLocations || [],
+        totalStops: ride.dropLocations?.length || 1,
+        legDistances: ride.legDistances || [],
         estimatedFare: ride.fare.total,
         distance: ride.distance,
         distanceText: distanceText,
@@ -1061,7 +1149,10 @@ export const startRide = async (req, res) => {
         status: ride.status,
         startedAt: ride.rideStartedAt,
         receiver: ride.receiver,
-        dropLocation: ride.dropLocation
+        dropLocation: ride.dropLocation,
+        dropLocations: ride.dropLocations || [],
+        totalStops: ride.dropLocations?.length || 1,
+        currentDropIndex: ride.currentDropIndex || 0
       }
     });
 
@@ -1547,9 +1638,14 @@ console.log(ride);
       distanceToTarget = etaInfo.distance;
       distanceToTargetText = etaInfo.distanceText;
     } else if (driverLocation && ride.status === 'in_progress') {
+      // For multi-drop: calculate ETA to current drop location
+      const currentIdx = ride.currentDropIndex || 0;
+      const targetDrop = (ride.dropLocations && ride.dropLocations.length > 0)
+        ? ride.dropLocations[Math.min(currentIdx, ride.dropLocations.length - 1)]
+        : ride.dropLocation;
       const etaInfo = await calculateDistanceAndDuration(
         driverLocation[1], driverLocation[0],
-        ride.dropLocation.coordinates[1], ride.dropLocation.coordinates[0],
+        targetDrop.coordinates[1], targetDrop.coordinates[0],
         driver?.vehicleType
       );
       eta = etaInfo.duration;
@@ -1570,6 +1666,10 @@ console.log(ride);
         distanceToTargetText,
         pickupLocation: ride.pickupLocation,
         dropLocation: ride.dropLocation,
+        dropLocations: ride.dropLocations || [],
+        totalStops: ride.dropLocations?.length || 1,
+        currentDropIndex: ride.currentDropIndex || 0,
+        legDistances: ride.legDistances || [],
         driver: {
           name: ride.driver.name,
           vehicleType: ride.driver.vehicleType,
@@ -1639,6 +1739,10 @@ export const getRideStatus = async (req, res) => {
         } : null,
         pickupLocation: ride.pickupLocation,
         dropLocation: ride.dropLocation,
+        dropLocations: ride.dropLocations || [],
+        totalStops: ride.dropLocations?.length || 1,
+        legDistances: ride.legDistances || [],
+        currentDropIndex: ride.currentDropIndex || 0,
         fare: ride.fare,
         distance: ride.distance,
         distanceText: ride.routeInfo?.distanceText,
@@ -2090,28 +2194,76 @@ export const getNearbyDrivers = async (req, res) => {
   }
 };
 
-// 18. Calculate fare estimate - UPDATED with simplified pricing
+// 18. Calculate fare estimate - UPDATED with multi-drop support
 export const calculateFareEstimate = async (req, res) => {
   try {
-    const { pickupLat, pickupLon, dropLat, dropLon, vehicleType = 'car' } = req.query;
+    const { pickupLat, pickupLon, dropLat, dropLon, vehicleType = 'car', drops } = req.query;
 
-    if (!pickupLat || !pickupLon || !dropLat || !dropLon) {
+    // Support multi-drop: drops = JSON array of {lat, lon} or use single dropLat/dropLon
+    let dropPoints = [];
+    if (drops) {
+      try {
+        dropPoints = JSON.parse(drops);
+      } catch (e) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid drops format. Expected JSON array of {lat, lon}'
+        });
+      }
+    } else if (dropLat && dropLon) {
+      dropPoints = [{ lat: dropLat, lon: dropLon }];
+    }
+
+    if (!pickupLat || !pickupLon || dropPoints.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide all coordinates'
+        message: 'Please provide pickup coordinates and at least one drop location'
       });
     }
 
-    const routeInfo = await calculateDistanceAndDuration(
-      parseFloat(pickupLat),
-      parseFloat(pickupLon),
-      parseFloat(dropLat),
-      parseFloat(dropLon),
-      vehicleType
-    );
+    if (dropPoints.length > 4) {
+      return res.status(400).json({
+        success: false,
+        message: 'Maximum 4 drop locations allowed'
+      });
+    }
 
-    // UPDATED: Calculate fare using simplified method (no duration, no peak hour)
-    const fare = Ride.calculateFare(routeInfo.distance, vehicleType);
+    // Calculate leg-by-leg distances
+    const legDistances = [];
+    let totalDistance = 0;
+    let totalDuration = 0;
+    let prevLat = parseFloat(pickupLat);
+    let prevLon = parseFloat(pickupLon);
+
+    for (let i = 0; i < dropPoints.length; i++) {
+      const dLat = parseFloat(dropPoints[i].lat);
+      const dLon = parseFloat(dropPoints[i].lon);
+      const legInfo = await calculateDistanceAndDuration(
+        prevLat, prevLon,
+        dLat, dLon,
+        vehicleType
+      );
+
+      legDistances.push({
+        leg: i + 1,
+        from: i === 0 ? 'Pickup' : `Drop ${i}`,
+        to: `Drop ${i + 1}`,
+        distance: legInfo.distance,
+        distanceText: legInfo.distanceText,
+        duration: legInfo.duration,
+        durationText: legInfo.durationText
+      });
+
+      totalDistance += legInfo.distance;
+      totalDuration += legInfo.duration;
+      prevLat = dLat;
+      prevLon = dLon;
+    }
+
+    totalDistance = parseFloat(totalDistance.toFixed(2));
+
+    // Calculate fare based on total cumulative distance
+    const fare = Ride.calculateFare(totalDistance, vehicleType);
 
     const nearbyDriversResult = await Driver.aggregate([
       {
@@ -2138,20 +2290,29 @@ export const calculateFareEstimate = async (req, res) => {
     res.json({
       success: true,
       data: {
-        distance: routeInfo.distance,
-        distanceText: routeInfo.distanceText,
-        duration: routeInfo.duration,
-        durationText: routeInfo.durationText,
-        durationInTraffic: routeInfo.durationInTraffic,
-        durationInTrafficText: routeInfo.durationInTrafficText,
+        totalStops: dropPoints.length,
+        distance: totalDistance,
+        distanceText: `${totalDistance.toFixed(1)} km`,
+        duration: totalDuration,
+        durationText: `${totalDuration} mins`,
+        legDistances,
         fare: {
           distanceFare: fare.distanceFare,
           total: fare.total,
-          breakdown: fare.breakdown
+          breakdown: {
+            ...fare.breakdown,
+            legs: legDistances.map(leg => ({
+              leg: `${leg.from} → ${leg.to}`,
+              distance: leg.distanceText,
+              duration: leg.durationText
+            })),
+            totalDistance: `${totalDistance.toFixed(1)} km`,
+            totalFare: `₹${fare.total}`
+          }
         },
         vehicleType,
         nearbyDrivers: nearbyDriversCount,
-        estimatedArrival: Math.min(routeInfo.durationInTraffic, routeInfo.duration) + 5
+        estimatedArrival: totalDuration + 5
       }
     });
 
@@ -2372,6 +2533,8 @@ export const acceptRideWithSocket = async (req, res) => {
       etaText: `${etaToPickup} mins`,
       pickupLocation: ride.pickupLocation,
       dropLocation: ride.dropLocation,
+      dropLocations: ride.dropLocations || [],
+      totalStops: ride.dropLocations?.length || 1,
       fare: ride.fare.total
     };
 
@@ -2400,6 +2563,8 @@ export const acceptRideWithSocket = async (req, res) => {
         customer: ride.customer,
         pickupLocation: ride.pickupLocation,
         dropLocation: ride.dropLocation,
+        dropLocations: ride.dropLocations || [],
+        totalStops: ride.dropLocations?.length || 1,
         eta: etaToPickup,
         etaText: `${etaToPickup} mins`,
         fare: ride.fare.total
@@ -2461,7 +2626,12 @@ export const getDriverLocationForTracking = async (req, res) => {
       etaText = `${eta} mins`;
       remainingDistance = distance;
     } else if (ride.status === 'in_progress') {
-      const [dropLon, dropLat] = ride.dropLocation.coordinates;
+      // For multi-drop: calculate ETA to current drop location
+      const currentIdx = ride.currentDropIndex || 0;
+      const targetDrop = (ride.dropLocations && ride.dropLocations.length > 0)
+        ? ride.dropLocations[Math.min(currentIdx, ride.dropLocations.length - 1)]
+        : ride.dropLocation;
+      const [dropLon, dropLat] = targetDrop.coordinates;
       const distance = calculateDistance(lat, lng, dropLat, dropLon);
       const speed = getAverageSpeed(driver.vehicleType);
       eta = Math.ceil((distance / speed) * 60);
@@ -2482,7 +2652,9 @@ export const getDriverLocationForTracking = async (req, res) => {
         eta,
         etaText,
         remainingDistance,
-        rideStatus: ride.status
+        rideStatus: ride.status,
+        currentDropIndex: ride.currentDropIndex || 0,
+        totalStops: ride.dropLocations?.length || 1
       }
     });
     
@@ -2552,6 +2724,10 @@ export const getRideTrackingInfo = async (req, res) => {
         driverDetails,
         pickupLocation: ride.pickupLocation,
         dropLocation: ride.dropLocation,
+        dropLocations: ride.dropLocations || [],
+        totalStops: ride.dropLocations?.length || 1,
+        currentDropIndex: ride.currentDropIndex || 0,
+        legDistances: ride.legDistances || [],
         fare: ride.fare,
         timestamps: {
           requestedAt: ride.requestedAt,

@@ -60,9 +60,26 @@ const rideSchema = new mongoose.Schema({
     type: locationSchema,
     required: true
   },
+  // Single drop location (backward compatibility - stores last/final drop)
   dropLocation: {
     type: locationSchema,
     required: true
+  },
+  // Multiple drop locations (up to 4)
+  dropLocations: [locationSchema],
+  // Per-leg distance breakdown
+  legDistances: [{
+    from: { type: String },      // "pickup", "drop_1", "drop_2", etc.
+    to: { type: String },        // "drop_1", "drop_2", etc.
+    distance: { type: Number },  // km
+    duration: { type: Number },  // minutes
+    distanceText: { type: String },
+    durationText: { type: String }
+  }],
+  // Track which drop the driver is currently heading to (0-indexed)
+  currentDropIndex: {
+    type: Number,
+    default: 0
   },
 
   // Route Details

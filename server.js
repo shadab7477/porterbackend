@@ -25,10 +25,11 @@ import verificationRoutes from './routes/verificationRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import walletRoutes from './routes/walletRoutes.js';
-
 import chatRoutes from './routes/chatRoutes.js';
 import shiftingRoutes from './routes/shiftingRoutes.js';
 import faqRoutes from './routes/faqRoutes.js';
+import adminNotificationRoutes from './routes/adminNotificationRoutes.js';
+
 dotenv.config();
 
 // ES module fix
@@ -38,15 +39,57 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const server = http.createServer(app);
 
-// Socket.IO configuration
+
+// ================== ✅ CORS CONFIG ==================
+
+const allowedOrigins = [
+  "https://godelivo.com",
+  "https://www.godelivo.com",
+  "http://godelivo.com",
+  "http://localhost:3000"
+];
+
+// Dynamic CORS function
+const corsOptions = {
+  origin: function (origin, callback) {
+    // allow no origin (Postman, mobile apps)
+    if (!origin) return callback(null, true);
+
+    // allow localhost any port
+    if (origin.startsWith("http://localhost") || origin.startsWith("http://127.0.0.1")) {
+      return callback(null, true);
+    }
+
+    // allow listed domains
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error("CORS not allowed: " + origin), false);
+  },
+  credentials: true
+};
+
+app.use(cors(corsOptions));
+
+
+// ================== 🔥 SOCKET.IO ==================
+
 const io = new Server(server, {
   cors: {
-    origin: [
-      "https://godelivo.com",
-      "https://www.godelivo.com",
-      "http://godelivo.com",
-      "http://localhost:3000"
-    ],
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+
+      if (
+        origin.startsWith("http://localhost") ||
+        origin.startsWith("http://127.0.0.1") ||
+        allowedOrigins.includes(origin)
+      ) {
+        callback(null, true);
+      } else {
+        callback("Socket CORS not allowed: " + origin);
+      }
+    },
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE"],
     credentials: true
   },
@@ -55,40 +98,39 @@ const io = new Server(server, {
   transports: ['websocket', 'polling']
 });
 
-// Initialize global maps
+
+// ================== 🌍 GLOBAL MAPS ==================
+
 global.activeDrivers = new Map();
 global.activeCustomers = new Map();
 global.activeRides = new Map();
 
-// Connect to database
+
+// ================== 🗄️ DATABASE ==================
+
 connectDB();
 
-// Initialize socket handlers\
-initializeRideTrackingSockets(io);
 
+// ================== ⚡ SOCKET HANDLERS ==================
+
+initializeRideTrackingSockets(io);
 initializeSockets(io);
 initializeSupportSockets(io);
 
 app.set('io', io);
 
-// Middleware
-app.use(cors({
-  origin: [
-    "https://godelivo.com",
-    "https://www.godelivo.com",
-    "http://godelivo.com",
-    "http://localhost:3000"
-  ],
-  credentials: true
-}));
+
+// ================== 🧱 MIDDLEWARE ==================
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Trust proxy (important for Nginx)
+// Trust proxy (NGINX)
 app.set('trust proxy', 1);
 
-// ================== API ROUTES ==================
+
+// ================== 📡 ROUTES ==================
+
 app.use('/api/auth', authRoutes);
 app.use('/api/drivers', driverRoutes);
 app.use('/api/orders', orderRoutes);
@@ -101,61 +143,60 @@ app.use('/api/verification', verificationRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/wallet', walletRoutes);
-
 app.use('/api/chat', chatRoutes);
 app.use('/api/shifting', shiftingRoutes);
 app.use('/api/faq', faqRoutes);
-// Health check
+app.use('/api/admin/notifications', adminNotificationRoutes);
+
+
+// ================== ❤️ HEALTH CHECK ==================
+
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy', 
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    socketConnections: io.engine?.clientsCount || 0,
-    activeDrivers: global.activeDrivers.size,
-    activeCustomers: global.activeCustomers.size,
-    activeRides: global.activeRides.size
+    time: new Date().toISOString(),
+    connections: io.engine?.clientsCount || 0,
+    drivers: global.activeDrivers.size,
+    customers: global.activeCustomers.size,
+    rides: global.activeRides.size
   });
 });
 
-// Socket.IO test endpoint
+
+// ================== 🔌 SOCKET TEST ==================
+
 app.get('/socket-test', (req, res) => {
   res.json({ 
-    status: 'Socket.IO ready', 
-    path: io.path(),
-    transports: ['websocket', 'polling'],
-    activeConnections: io.engine?.clientsCount || 0
+    status: 'Socket.IO ready',
+    connections: io.engine?.clientsCount || 0
   });
 });
 
-// ================== SERVE REACT BUILD ==================
-// Serve static files from the React build folder
+
+// ================== 📦 REACT BUILD ==================
+
 app.use(express.static(path.join(__dirname, 'build')));
 
-// Handle React routing - serve index.html for any non-API route
 app.get(/^\/(?!api|health|socket-test).*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
-// ================== ERROR HANDLER ==================
+
+// ================== ❌ ERROR HANDLER ==================
+
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error("ERROR:", err.message);
   res.status(500).json({
     success: false,
-    message: 'Internal Server Error',
-    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    message: err.message || 'Internal Server Error'
   });
 });
 
-// ================== SERVER START ==================
+
+// ================== 🚀 SERVER START ==================
+
 const PORT = process.env.PORT || 5001;
 
-// Listen on localhost only (Nginx will proxy)
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📡 Listening on: http://127.0.0.1:${PORT}`);
-  console.log(`⚡ Socket.IO ready`);
-  console.log(`📦 Serving React build from: ${path.join(__dirname, 'build')}`);
+  console.log(`🚀 Server running on http://127.0.0.1:${PORT}`);
 });
-
-export { app, server, io };
