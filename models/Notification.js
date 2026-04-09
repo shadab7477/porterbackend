@@ -22,7 +22,7 @@ const notificationSchema = new mongoose.Schema({
   senderId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Admin',
-    required: true
+    required: false
   },
   data: {
     type: mongoose.Schema.Types.Mixed,
