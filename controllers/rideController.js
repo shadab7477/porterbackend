@@ -822,7 +822,7 @@ export const acceptRide = async (req, res) => {
   try {
     const driverId = req.driver.id;
     const { rideId } = req.body;
-console.log(req.body);
+    console.log(req.body);
 
     const driver = await Driver.findById(driverId);
     if (!driver || !driver.isOnline || !driver.isAvailable) {
@@ -831,10 +831,10 @@ console.log(req.body);
         message: 'You must be online and available to accept rides'
       });
     }
-const ride = await Ride.findOne({
-  rideId,
-  status: { $in: ['searching', 'no_drivers'] }
-})
+    const ride = await Ride.findOne({
+      rideId,
+      status: { $in: ['searching', 'no_drivers'] }
+    })
     if (!ride) {
       return res.status(404).json({
         success: false,
@@ -843,7 +843,7 @@ const ride = await Ride.findOne({
     }
 
     console.log(ride);
-    
+
 
     const [driverLon, driverLat] = driver.currentLocation.coordinates;
     const [pickupLon, pickupLat] = ride.pickupLocation.coordinates;
@@ -1253,13 +1253,13 @@ export const completeRide = async (req, res) => {
 
 // ==================== CANCEL RIDE - FIXED VERSION ====================
 export const cancelRide = async (req, res) => {
-  try { 
+  try {
     const { rideId, reason } = req.body;
-    
+
     // FIX: Properly determine user type and ID from request
     let userType = null;
     let userId = null;
-    
+
     // Check if it's a customer (has customerId from customerAuthMiddleware)
     if (req.customerId) {
       userType = 'customer';
@@ -1278,7 +1278,7 @@ export const cancelRide = async (req, res) => {
       userId = req.adminId;
       console.log('👤 Cancelling as ADMIN:', userId);
     }
-    
+
     if (!userType) {
       return res.status(401).json({
         success: false,
@@ -1323,7 +1323,7 @@ export const cancelRide = async (req, res) => {
 
     // Authorization check based on user type
     let isAuthorized = false;
-    
+
     if (userType === 'customer') {
       const rideCustomerId = ride.customer?.customerId?._id?.toString() || ride.customer?.customerId?.toString();
       if (rideCustomerId === userId.toString()) {
@@ -1332,7 +1332,7 @@ export const cancelRide = async (req, res) => {
       } else {
         console.log('❌ Customer not authorized:', { rideCustomerId, userId });
       }
-    } 
+    }
     else if (userType === 'driver') {
       const rideDriverId = ride.driver?.driverId?._id?.toString() || ride.driver?.driverId?.toString();
       if (rideDriverId === userId.toString()) {
@@ -1346,7 +1346,7 @@ export const cancelRide = async (req, res) => {
       isAuthorized = true;
       console.log('✅ Admin authorized to cancel');
     }
-    
+
     if (!isAuthorized) {
       return res.status(403).json({
         success: false,
@@ -1356,18 +1356,18 @@ export const cancelRide = async (req, res) => {
 
     // NO CANCELLATION FEE - Simple cancellation
     const io = req.app.get('io');
-    
+
     // Update ride status
     ride.status = 'cancelled';
     ride.cancelledAt = new Date();
     ride.cancelledBy = userType;
     ride.cancellationReason = reason || (userType === 'customer' ? 'Cancelled by customer' : (userType === 'driver' ? 'Cancelled by driver' : 'Cancelled by admin'));
     ride.cancellationFee = 0; // No fee
-    
+
     // Handle payment refund if applicable
     let refundAmount = 0;
     let paymentRefundNeeded = false;
-    
+
     if (ride.paymentMethod !== 'cash' && ride.paymentStatus === 'completed') {
       // Full refund for prepaid rides
       refundAmount = ride.fare.finalAmount;
@@ -1376,7 +1376,7 @@ export const cancelRide = async (req, res) => {
       ride.refundAmount = refundAmount;
       ride.refundProcessedAt = new Date();
     }
-    
+
     await ride.save();
     console.log('✅ Ride cancelled and saved');
 
@@ -1407,7 +1407,7 @@ export const cancelRide = async (req, res) => {
     }
 
     // ==================== SOCKET EMISSIONS ====================
-    
+
     // 1. Notify customer (if they didn't cancel)
     if (ride.customer && ride.customer.customerId && userType !== 'customer') {
       const customerId = ride.customer.customerId._id || ride.customer.customerId;
@@ -1603,15 +1603,15 @@ export const trackRide = async (req, res) => {
   try {
     const customerId = req.customerId;
     const { rideId } = req.params;
-console.log(rideId);
+    console.log(rideId);
     const ride = await Ride.findOne({
       rideId,
       'customer.customerId': customerId,
       status: { $in: ['driver_assigned', 'driver_arrived', 'in_progress'] }
     }).populate('driver.driverId');
 
-console.log(ride);
-    
+    console.log(ride);
+
     if (!ride) {
       return res.status(404).json({
         success: false,
@@ -2378,7 +2378,7 @@ export const updateDriverLocationWithSocket = async (req, res) => {
     // If on a ride, broadcast to ride room
     if (rideId) {
       io.to(`ride:${rideId}`).emit('driver:location-updated', locationData);
-      
+
       // Also emit to ride tracking namespace
       const rideTrackingNsp = io.of('/ride-tracking');
       rideTrackingNsp.to(`ride:${rideId}`).emit('driver:location-updated', locationData);
@@ -2425,11 +2425,11 @@ async function findNearbyCustomers(latitude, longitude, radius) {
     }).populate('customer.customerId');
 
     const nearbyCustomers = [];
-    
+
     for (const ride of searchingRides) {
       const [pickupLon, pickupLat] = ride.pickupLocation.coordinates;
       const distance = calculateDistance(latitude, longitude, pickupLat, pickupLon);
-      
+
       if (distance <= radius) {
         nearbyCustomers.push({
           customerId: ride.customer.customerId,
@@ -2439,7 +2439,7 @@ async function findNearbyCustomers(latitude, longitude, radius) {
         });
       }
     }
-    
+
     return nearbyCustomers;
   } catch (error) {
     console.error('Error finding nearby customers:', error);
@@ -2540,7 +2540,7 @@ export const acceptRideWithSocket = async (req, res) => {
 
     // Notify customer
     io.to(`customer:${ride.customer.customerId}`).emit('ride:accepted', acceptanceData);
-    
+
     // Also emit to ride tracking namespace
     const rideTrackingNsp = io.of('/ride-tracking');
     rideTrackingNsp.to(`ride:${ride.rideId}`).emit('ride:accepted', acceptanceData);
@@ -2585,39 +2585,39 @@ export const getDriverLocationForTracking = async (req, res) => {
   try {
     const { rideId } = req.params;
     const customerId = req.customerId;
-    
+
     const ride = await Ride.findOne({ rideId, 'customer.customerId': customerId });
-    
+
     if (!ride) {
       return res.status(404).json({
         success: false,
         message: 'Ride not found'
       });
     }
-    
+
     if (!ride.driver?.driverId) {
       return res.status(404).json({
         success: false,
         message: 'No driver assigned yet'
       });
     }
-    
+
     const driver = await Driver.findById(ride.driver.driverId);
-    
+
     if (!driver) {
       return res.status(404).json({
         success: false,
         message: 'Driver not found'
       });
     }
-    
+
     const [lng, lat] = driver.currentLocation.coordinates;
-    
+
     // Calculate ETA based on ride status
     let eta = null;
     let etaText = null;
     let remainingDistance = null;
-    
+
     if (ride.status === 'driver_assigned' || ride.status === 'driver_arrived') {
       const [pickupLon, pickupLat] = ride.pickupLocation.coordinates;
       const distance = calculateDistance(lat, lng, pickupLat, pickupLon);
@@ -2638,7 +2638,7 @@ export const getDriverLocationForTracking = async (req, res) => {
       etaText = `${eta} mins`;
       remainingDistance = distance;
     }
-    
+
     res.json({
       success: true,
       data: {
@@ -2657,7 +2657,7 @@ export const getDriverLocationForTracking = async (req, res) => {
         totalStops: ride.dropLocations?.length || 1
       }
     });
-    
+
   } catch (error) {
     console.error('Get driver location error:', error);
     res.status(500).json({
@@ -2672,16 +2672,16 @@ export const getRideTrackingInfo = async (req, res) => {
   try {
     const { rideId } = req.params;
     const userId = req.customerId || req.driver?.id;
-    
+
     const ride = await Ride.findOne({ rideId });
-    
+
     if (!ride) {
       return res.status(404).json({
         success: false,
         message: 'Ride not found'
       });
     }
-    
+
     // Check authorization
     if (req.customerId && ride.customer.customerId.toString() !== userId) {
       return res.status(403).json({
@@ -2689,17 +2689,17 @@ export const getRideTrackingInfo = async (req, res) => {
         message: 'Not authorized'
       });
     }
-    
+
     if (req.driver && ride.driver?.driverId?.toString() !== userId) {
       return res.status(403).json({
         success: false,
         message: 'Not authorized'
       });
     }
-    
+
     let driverLocation = null;
     let driverDetails = null;
-    
+
     if (ride.driver?.driverId) {
       const driver = await Driver.findById(ride.driver.driverId);
       if (driver && driver.currentLocation) {
@@ -2714,7 +2714,7 @@ export const getRideTrackingInfo = async (req, res) => {
         };
       }
     }
-    
+
     res.json({
       success: true,
       data: {
@@ -2738,7 +2738,7 @@ export const getRideTrackingInfo = async (req, res) => {
         }
       }
     });
-    
+
   } catch (error) {
     console.error('Get ride tracking info error:', error);
     res.status(500).json({
@@ -2752,11 +2752,11 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = 
-    Math.sin(dLat/2) * Math.sin(dLat/2) +
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-    Math.sin(dLon/2) * Math.sin(dLon/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
 

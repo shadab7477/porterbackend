@@ -126,37 +126,52 @@ export const createCustomer = async (req, res) => {
 
 export const updateCustomer = async (req, res) => {
   try {
-    const { name, email, address } = req.body;
-    
+    const { name, email, address, fcmToken } = req.body;
+
+    // Build update object dynamically
+    const updateData = {
+      updatedAt: Date.now()
+    };
+
+    if (name) updateData.name = name;
+    if (email) updateData.email = email;
+    if (address) updateData.address = address;
+
+    // ✅ Save FCM token if provided
+    if (fcmToken) {
+      updateData.fcmToken = fcmToken;
+    }
+
     const customer = await Customer.findByIdAndUpdate(
       req.params.id,
-      { name, email, address, updatedAt: Date.now() },
+      updateData,
       { new: true, runValidators: true }
     );
-    
+
     if (!customer) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Customer not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Customer not found'
       });
     }
-    
-    // Emit socket event
+
+    // 🔥 Emit socket event
     const io = req.app.get('io');
     if (io) {
       io.emit('customer:updated', customer);
     }
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       data: customer,
       message: 'Customer updated successfully'
     });
+
   } catch (error) {
     console.error('Error in updateCustomer:', error);
-    res.status(400).json({ 
-      success: false, 
-      message: error.message || 'Failed to update customer' 
+    res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to update customer'
     });
   }
 };
