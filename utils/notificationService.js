@@ -14,6 +14,7 @@ export const sendNotification = async (fcmToken, title, body, data = {}) => {
     }
 
     try {
+        console.log(`Sending notification to token: ${fcmToken.substring(0, 10)}... Title: ${title}`);
         const message = {
             notification: {
                 title,

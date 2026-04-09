@@ -43,6 +43,7 @@ console.log(req.body);
         id: user._id,
         fcmToken: user.fcmToken,
         name: user.name,
+        phone: user.phone,
         type: 'user'
       })));
     }
@@ -58,12 +59,23 @@ console.log(req.body);
         id: driver._id,
         fcmToken: driver.fcmToken,
         name: driver.name,
+        phone: driver.phone,
         type: 'driver'
       })));
     }
 
-    // Filter out recipients without FCM tokens
-    const validRecipients = targetRecipients.filter(r => r.fcmToken);
+    // Filter out recipients without FCM tokens and ensure unique by phone
+    const uniqueRecipients = new Map();
+    targetRecipients.forEach(recipient => {
+      if (recipient.fcmToken && recipient.phone && !uniqueRecipients.has(recipient.phone)) {
+        uniqueRecipients.set(recipient.phone, recipient);
+      }
+    });
+
+    const validRecipients = Array.from(uniqueRecipients.values());
+
+    console.log(`Sending notification to ${validRecipients.length} unique recipients by phone`);
+    validRecipients.forEach(r => console.log(`Recipient: ${r.name} (${r.phone}) - ${r.type}`));
 
     if (validRecipients.length === 0) {
       return res.status(400).json({
@@ -72,11 +84,12 @@ console.log(req.body);
       });
     }
 
-    // Send notifications
+    // Send notifications (send to only one recipient to ensure single notification)
     const notificationResults = [];
     const failedNotifications = [];
 
-    for (const recipient of validRecipients) {
+    if (validRecipients.length > 0) {
+      const recipient = validRecipients[0];
       try {
         const result = await sendNotification(
           recipient.fcmToken,
@@ -118,7 +131,7 @@ console.log(req.body);
       title,
       message,
       recipientType,
-      recipientIds: validRecipients.map(r => r.id),
+      recipientIds: validRecipients.length > 0 ? [validRecipients[0].id] : [],
       senderId: req.adminId,
       data: {
         ...data,
