@@ -29,6 +29,9 @@ import chatRoutes from './routes/chatRoutes.js';
 import shiftingRoutes from './routes/shiftingRoutes.js';
 import faqRoutes from './routes/faqRoutes.js';
 import adminNotificationRoutes from './routes/adminNotificationRoutes.js';
+import adminRestrictedItemsRoutes from './routes/adminRestrictedItemsRoutes.js';
+import adminGoodsItemsRoutes from './routes/adminGoodsItemsRoutes.js';
+import adminPricingRoutes from './routes/adminPricingRoutes.js';
 
 dotenv.config();
 
@@ -147,6 +150,9 @@ app.use('/api/chat', chatRoutes);
 app.use('/api/shifting', shiftingRoutes);
 app.use('/api/faq', faqRoutes);
 app.use('/api/admin/notifications', adminNotificationRoutes);
+app.use('/api/admin/restricted-items', adminRestrictedItemsRoutes);
+app.use('/api/admin/goods-items', adminGoodsItemsRoutes);
+app.use('/api/admin/pricing', adminPricingRoutes);
 
 
 // ================== ❤️ HEALTH CHECK ==================
