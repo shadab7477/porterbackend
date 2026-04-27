@@ -210,7 +210,8 @@ export const getDriverPendingRequests = async (req, res) => {
             spherical: true,
             query: {
               status: 'searching',
-              'driver.driverId': { $exists: false }
+              'driver.driverId': { $exists: false },
+              requestedVehicleType: driver.vehicleType
             }
           }
         },
@@ -263,6 +264,7 @@ export const getDriverPendingRequests = async (req, res) => {
         const pendingRides = await Ride.find({
           status: 'searching',
           'driver.driverId': { $exists: false },
+          requestedVehicleType: driver.vehicleType,
           pickupLocation: {
             $near: {
               $geometry: {
@@ -300,7 +302,8 @@ export const getDriverPendingRequests = async (req, res) => {
         // TRY APPROACH 3: Manual calculation (no index needed)
         const allRides = await Ride.find({
           status: 'searching',
-          'driver.driverId': { $exists: false }
+          'driver.driverId': { $exists: false },
+          requestedVehicleType: driver.vehicleType
         })
           .sort({ requestedAt: -1 })
           .limit(50)
@@ -373,14 +376,14 @@ async function processRides(pendingRides, driver, driverId, driverLat, driverLon
       if (hasResponded) return null;
 
       // Calculate expiration time
-      let expiresIn = 30;
+      let expiresIn = 120;
       if (wasNotified) {
         const notification = ride.driversNotified?.find(
           d => d.driverId && d.driverId.toString() === driverId.toString()
         );
         if (notification?.notifiedAt) {
           const timeElapsed = Math.floor((Date.now() - new Date(notification.notifiedAt).getTime()) / 1000);
-          expiresIn = Math.max(0, 30 - timeElapsed);
+          expiresIn = Math.max(0, 120 - timeElapsed);
           if (expiresIn <= 0) return null;
         }
       }
@@ -607,6 +610,7 @@ export const requestRide = async (req, res) => {
     }));
 
     const ride = new Ride({
+      requestedVehicleType: vehicleType,
       customer: {
         customerId,
         name: customer.name || 'Customer',
@@ -725,7 +729,8 @@ const findNearbyDrivers = async (ride, io, radius = 5) => {
           query: {
             isOnline: true,
             isAvailable: true,
-            isBlocked: false
+            isBlocked: false,
+            vehicleType: ride.requestedVehicleType || 'car'
           }
         }
       },
@@ -762,7 +767,7 @@ const findNearbyDrivers = async (ride, io, radius = 5) => {
         distanceFromPickup: driver.distanceFromPickup / 1000
       });
 
-      io.to(`driver:${driver._id}`).emit('ride:new_request', {
+      io.of('/drivers').to(`driver:${driver._id}`).emit('ride:new_request', {
         rideId: ride.rideId,
         pickupLocation: ride.pickupLocation,
         dropLocation: ride.dropLocation,
@@ -776,14 +781,14 @@ const findNearbyDrivers = async (ride, io, radius = 5) => {
         distanceFromDriverText: etaInfo.distanceText,
         etaToPickup: etaInfo.duration,
         etaToPickupText: etaInfo.durationText,
-        expiresIn: 30
+        expiresIn: 120
       });
     }
 
     ride.driversNotified = notifiedDrivers;
     await ride.save();
 
-    setTimeout(() => handleDriverResponseTimeout(ride, io), 30000);
+    setTimeout(() => handleDriverResponseTimeout(ride, io), 120000);
 
   } catch (error) {
     console.error('Find nearby drivers error:', error);

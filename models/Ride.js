@@ -23,6 +23,11 @@ const rideSchema = new mongoose.Schema({
     unique: true,
     default: () => 'RID' + Date.now().toString().slice(-8) + Math.floor(Math.random() * 1000)
   },
+  requestedVehicleType: {
+    type: String,
+    required: true,
+    default: 'car'
+  },
 
   // Customer Details
   customer: {

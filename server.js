@@ -11,6 +11,7 @@ import connectDB from './config/database.js';
 import initializeSockets from './sockets/socketHandler.js';
 import { initializeSupportSockets } from './sockets/supportSocketHandler.js';
 import { initializeRideTrackingSockets } from './sockets/rideTrackingSocket.js';
+import { initializePackerSockets } from './sockets/packerSocketHandler.js';
 
 // Routes
 import driverRoutes from './routes/driverRoutes.js';
@@ -32,6 +33,7 @@ import adminNotificationRoutes from './routes/adminNotificationRoutes.js';
 import adminRestrictedItemsRoutes from './routes/adminRestrictedItemsRoutes.js';
 import adminGoodsItemsRoutes from './routes/adminGoodsItemsRoutes.js';
 import adminPricingRoutes from './routes/adminPricingRoutes.js';
+import packerBookingRoutes from './routes/packerBookingRoutes.js';
 
 dotenv.config();
 
@@ -119,6 +121,7 @@ connectDB();
 initializeRideTrackingSockets(io);
 initializeSockets(io);
 initializeSupportSockets(io);
+initializePackerSockets(io);
 
 app.set('io', io);
 
@@ -153,6 +156,7 @@ app.use('/api/admin/notifications', adminNotificationRoutes);
 app.use('/api/admin/restricted-items', adminRestrictedItemsRoutes);
 app.use('/api/admin/goods-items', adminGoodsItemsRoutes);
 app.use('/api/admin/pricing', adminPricingRoutes);
+app.use('/api/packer-bookings', packerBookingRoutes);
 
 
 // ================== ❤️ HEALTH CHECK ==================
