@@ -1,11 +1,11 @@
 import axios from "axios";
 
 const SMS_CONFIG = {
-  authKey: process.env.BULKSMS_AUTH_KEY || "3237656e63656738303394",
-  sender: process.env.BULKSMS_SENDER || "CLGFOM",
-  route: process.env.BULKSMS_ROUTE || "2",
-  country: process.env.BULKSMS_COUNTRY || "0",
-  DLT_TE_ID: process.env.BULKSMS_DLT_ID || "1707176137809504396"
+  ukey: "2W24DQJ6Nul7bJtgNjtt4CHVd",
+  senderId: "Delivo",
+  creditType: 2,           // 2 = Transactional (better for OTPs)
+  language: 0,             // English
+  // No templateId – we use raw message
 };
 
 export const generateOTP = () => {
@@ -14,21 +14,38 @@ export const generateOTP = () => {
 
 export const sendSmsOtp = async (mobile, otp) => {
   try {
-    const { authKey, sender, route, country, DLT_TE_ID } = SMS_CONFIG;
-    
-    const message = `Thanks for verifying your number! Use OTP ${otp} to unlock exclusive discounts on your college Applications. Valid for 15 minutes only. www.collegeforms.in`;
+    const { ukey, senderId, creditType, language } = SMS_CONFIG;
 
-    const url = `http://control.yourbulksms.com/api/sendhttp.php?authkey=${authKey}&mobiles=${mobile}&sender=${sender}&route=${route}&country=${country}&DLT_TE_ID=${DLT_TE_ID}&message=${encodeURIComponent(message)}`;
+    const message = `your godevlivo otp is ${otp} to complete your booking. it is valid for 15 minutes. do not share it with anyone. #godevlivo`;
 
-    const { data } = await axios.get(url);
-    console.log("✅ SMS API Response:", data);
-    console.log("📲 OTP sent to", mobile, ":", otp);
-    
-    return { success: true, data };
+    // Build GET URL with parameters
+    const url = "https://api.voicensms.in/SMSAPI/webresources/CreateSMSCampaignGet";
+    const params = {
+      ukey,
+      msisdn: mobile,
+      language,
+      credittype: creditType,
+      senderid: senderId,
+      templateid: 0,               // 0 means custom message
+      message: message,
+      filetype: 2,                 // Single number
+      isrefno: true,               // Get reference number
+      // dlttemplateid is NOT needed for GET (but add if your API requires it)
+    };
+
+    const { data } = await axios.get(url, { params });
+
+    console.log("✅ SMS GET response:", data);
+    console.log(`📲 OTP ${otp} sent to ${mobile}`);
+
+    // Adjust success condition based on actual API response
+    if (data.status === "success" || data.responseCode === "0") {
+      return { success: true, data };
+    } else {
+      return { success: false, error: data.value || data.message || "SMS failed" };
+    }
   } catch (err) {
-    console.error("❌ Error sending SMS OTP:", err.message);
+    console.error("❌ Error sending SMS OTP via GET:", err.message);
     return { success: false, error: err.message };
   }
 };
-
-export default { sendSmsOtp, generateOTP };
