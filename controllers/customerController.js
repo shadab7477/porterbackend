@@ -21,6 +21,7 @@ export const getAllCustomers = async (req, res) => {
     sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1;
     
     const customers = await Customer.find(query)
+      .populate('merchantApplicationId')
       .skip((page - 1) * limit)
       .limit(parseInt(limit))
       .sort(sortOptions);

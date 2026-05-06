@@ -104,12 +104,14 @@ const rideSchema = new mongoose.Schema({
     durationInTrafficText: String
   },
 
-  // Fare Details - SIMPLIFIED: only distanceFare and total
+  // Fare Details
   fare: {
     distanceFare: { type: Number, default: 0 },
     total: { type: Number, required: true },
     discount: { type: Number, default: 0 },
-    finalAmount: { type: Number, required: true }
+    finalAmount: { type: Number, required: true },
+    isMerchantRide: { type: Boolean, default: false },
+    merchantDiscount: { type: Number, default: 0 }  // percentage applied
   },
 
   // Payment
@@ -269,41 +271,50 @@ rideSchema.methods.updateStatus = function (status) {
   return this;
 };
 
-// SIMPLIFIED: Static method to calculate fare - ONLY per km rates, no base, no tax
-rideSchema.statics.calculateFare = function (distance, vehicleType = 'car') {
-  // Per kilometer rates only - as specified
+// Static method to calculate fare — per-km rates + optional merchant 5% discount
+rideSchema.statics.calculateFare = function (distance, vehicleType = 'car', isMerchant = false) {
   const perKmRates = {
     // 2 Wheelers
-    'bike': 15,        // Bike & Scooty
-    'scooty': 15,      // Alternative name for bike
-    
+    'bike':       15,
+    'scooty':     15,
     // 3 Wheelers
-    'auto': 35,        // Mini 3W
-    'mini_3w': 35,     // Mini 3W
-    'e_loader': 45,    // E Loader
-    
+    'auto':       35,
+    'mini_3w':    35,
+    'e_loader':   45,
     // 4 Wheelers
-    'car': 105,        // TATA Ace
-    'tata_ace': 105,   // TATA Ace
-    'mini_truck': 105, // Alternative for TATA Ace
-    'truck': 105       // Default for larger vehicles
+    'car':        105,
+    'tata_ace':   105,
+    'mini_truck': 105,
+    'truck':      105
   };
 
-  // Get rate per km, default to car rate if vehicle type not found
-  const ratePerKm = perKmRates[vehicleType] || perKmRates.car;
-  
-  // Calculate total fare: distance × rate per km
-  const totalFare = distance * ratePerKm;
+  const ratePerKm   = perKmRates[vehicleType] || perKmRates.car;
+  const totalFare   = distance * ratePerKm;
+  const roundedTotal = Math.round(totalFare);
 
-  // Return simplified fare object
+  // Apply merchant 5% discount
+  const MERCHANT_DISCOUNT_PERCENT = 5;
+  let finalAmount = roundedTotal;
+  let discountAmount = 0;
+
+  if (isMerchant) {
+    discountAmount = Math.round(roundedTotal * MERCHANT_DISCOUNT_PERCENT / 100);
+    finalAmount    = roundedTotal - discountAmount;
+  }
+
   return {
-    distanceFare: Math.round(totalFare),
-    total: Math.round(totalFare),
-    finalAmount: Math.round(totalFare),
+    distanceFare:     roundedTotal,
+    total:            roundedTotal,
+    discount:         discountAmount,
+    finalAmount,
+    isMerchantRide:   isMerchant,
+    merchantDiscount: isMerchant ? MERCHANT_DISCOUNT_PERCENT : 0,
     breakdown: {
-      ratePerKm: `₹${ratePerKm}/km`,
-      distance: `${distance.toFixed(1)} km`,
-      total: `₹${Math.round(totalFare)}`
+      ratePerKm:   `₹${ratePerKm}/km`,
+      distance:    `${distance.toFixed(1)} km`,
+      subtotal:    `₹${roundedTotal}`,
+      discount:    isMerchant ? `₹${discountAmount} (5% merchant discount)` : '₹0',
+      total:       `₹${finalAmount}`
     }
   };
 };

@@ -33,6 +33,22 @@ const customerSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+
+  // Merchant account
+  isMerchant: {
+    type: Boolean,
+    default: false
+  },
+  merchantDiscount: {
+    type: Number,
+    default: 5  // percentage
+  },
+  merchantApplicationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'MerchantApplication',
+    default: null
+  },
+
   lastLogin: {
     type: Date
   },

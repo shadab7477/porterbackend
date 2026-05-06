@@ -34,6 +34,7 @@ import adminRestrictedItemsRoutes from './routes/adminRestrictedItemsRoutes.js';
 import adminGoodsItemsRoutes from './routes/adminGoodsItemsRoutes.js';
 import adminPricingRoutes from './routes/adminPricingRoutes.js';
 import packerBookingRoutes from './routes/packerBookingRoutes.js';
+import merchantRoutes from './routes/merchantRoutes.js';
 
 dotenv.config();
 
@@ -157,6 +158,7 @@ app.use('/api/admin/restricted-items', adminRestrictedItemsRoutes);
 app.use('/api/admin/goods-items', adminGoodsItemsRoutes);
 app.use('/api/admin/pricing', adminPricingRoutes);
 app.use('/api/packer-bookings', packerBookingRoutes);
+app.use('/api/merchant', merchantRoutes);
 
 
 // ================== ❤️ HEALTH CHECK ==================

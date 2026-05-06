@@ -595,8 +595,10 @@ export const requestRide = async (req, res) => {
 
     totalDistance = parseFloat(totalDistance.toFixed(2));
 
-    // Calculate fare based on total cumulative distance
-    const fare = Ride.calculateFare(totalDistance, vehicleType);
+    // Calculate fare based on total cumulative distance (merchant gets 5% discount)
+    const isMerchant = customer.isMerchant || false;
+    const fare = Ride.calculateFare(totalDistance, vehicleType, isMerchant);
+
 
     // The final/last drop location for backward compatibility
     const finalDrop = allDropLocations[allDropLocations.length - 1];
@@ -645,9 +647,12 @@ export const requestRide = async (req, res) => {
         durationInTrafficText: `${totalDuration} mins`
       },
       fare: {
-        distanceFare: fare.distanceFare,
-        total: fare.total,
-        finalAmount: fare.finalAmount
+        distanceFare:     fare.distanceFare,
+        total:            fare.total,
+        discount:         fare.discount,
+        finalAmount:      fare.finalAmount,
+        isMerchantRide:   fare.isMerchantRide,
+        merchantDiscount: fare.merchantDiscount
       },
       paymentMethod,
       paymentStatus: 'pending',
@@ -693,8 +698,12 @@ export const requestRide = async (req, res) => {
             duration: leg.durationText
           })),
           totalDistance: `${totalDistance.toFixed(1)} km`,
-          totalFare: `₹${fare.total}`
+          totalFare: `₹${fare.finalAmount}`,
+          merchantDiscount: fare.isMerchantRide
+            ? { applied: true, percent: fare.merchantDiscount, saved: `₹${fare.discount}` }
+            : { applied: false }
         },
+        isMerchantRide: fare.isMerchantRide,
         paymentMethod: ride.paymentMethod
       }
     });
