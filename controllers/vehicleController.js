@@ -56,7 +56,7 @@ export const getVehicleByType = async (req, res) => {
 
 export const createVehicle = async (req, res) => {
   try {
-    const { vehicleType, category, name, baseFare, pricePerKm, capacity, description } = req.body;
+    const { vehicleType, category, name, baseFare, pricePerKm, capacity, weight, description } = req.body;
     
     const existingVehicle = await Vehicle.findOne({ vehicleType });
     if (existingVehicle) {
@@ -70,6 +70,7 @@ export const createVehicle = async (req, res) => {
       baseFare,
       pricePerKm,
       capacity,
+      weight,
       description
     });
     

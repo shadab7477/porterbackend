@@ -32,6 +32,11 @@ const vehicleSchema = new mongoose.Schema({
     required: [true, 'Capacity is required'],
     min: 1
   },
+  weight: {
+    type: String,
+    trim: true,
+    default: ''
+  },
   description: {
     type: String,
     trim: true
