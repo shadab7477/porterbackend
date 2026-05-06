@@ -20,10 +20,13 @@ export const getAllCustomers = async (req, res) => {
     const sortOptions = {};
     sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1;
     
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = parseInt(limit, 10) || 10;
+    
     const customers = await Customer.find(query)
       .populate('merchantApplicationId')
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit))
+      .skip((pageNum - 1) * limitNum)
+      .limit(limitNum)
       .sort(sortOptions);
     
     const total = await Customer.countDocuments(query);

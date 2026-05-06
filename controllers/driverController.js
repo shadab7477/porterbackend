@@ -241,9 +241,12 @@ export const getAllDrivers = async (req, res) => {
     if (vehicleType) query.vehicleType = vehicleType;
     if (verificationStatus) query.verificationStatus = verificationStatus;
     
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = parseInt(limit, 10) || 10;
+    
     const drivers = await Driver.find(query)
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit))
+      .skip((pageNum - 1) * limitNum)
+      .limit(limitNum)
       .sort({ createdAt: -1 });
     
     const total = await Driver.countDocuments(query);
@@ -656,10 +659,12 @@ export const getPendingVerifications = async (req, res) => {
     const query = {
       verificationStatus: { $in: ['pending', 'under_review'] }
     };
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = parseInt(limit, 10) || 10;
     
     const drivers = await Driver.find(query)
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit))
+      .skip((pageNum - 1) * limitNum)
+      .limit(limitNum)
       .sort({ submittedAt: -1 });
     
     const total = await Driver.countDocuments(query);

@@ -183,11 +183,14 @@ export const getAllMerchantApplications = async (req, res) => {
     const query = {};
     if (status && status !== 'all') query.status = status;
 
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = parseInt(limit, 10) || 10;
+
     const [applications, total] = await Promise.all([
       MerchantApplication.find(query)
         .sort({ submittedAt: -1 })
-        .skip((page - 1) * limit)
-        .limit(parseInt(limit))
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
         .select('-__v'),
       MerchantApplication.countDocuments(query)
     ]);
