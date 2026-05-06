@@ -35,7 +35,6 @@ import adminGoodsItemsRoutes from './routes/adminGoodsItemsRoutes.js';
 import adminPricingRoutes from './routes/adminPricingRoutes.js';
 import packerBookingRoutes from './routes/packerBookingRoutes.js';
 import merchantRoutes from './routes/merchantRoutes.js';
-import vehicleRoutes from './routes/vehicleRoutes.js';
 
 dotenv.config();
 
