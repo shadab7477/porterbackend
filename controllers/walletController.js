@@ -1,11 +1,15 @@
-import Stripe from 'stripe';
+import Razorpay from 'razorpay';
+import crypto from 'crypto';
 import WalletTransaction from '../models/WalletTransaction.js';
 import Customer from '../models/Customer.js';
 import Driver from '../models/Driver.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+const razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID || 'rzp_live_ST0TZQUt1IwsqU',
+    key_secret: process.env.RAZORPAY_KEY_SECRET || 'OZdye2d48zaLY1gSko96eJsX'
+});
 
 // 1. Get Wallet Balance and History
 export const getWalletBalance = async (req, res) => {
@@ -46,8 +50,8 @@ export const getWalletBalance = async (req, res) => {
     }
 };
 
-// 2. Add Money Intent (Stripe)
-export const addMoneyIntent = async (req, res) => {
+// 2. Create Razorpay Order for Wallet Top-up
+export const createWalletOrder = async (req, res) => {
     try {
         const { amount } = req.body; // Amount in INR
         if (!amount || amount <= 0) {
@@ -62,25 +66,31 @@ export const addMoneyIntent = async (req, res) => {
             return res.status(401).json({ success: false, message: 'Unauthorized' });
         }
 
-        // Create a PaymentIntent with the order amount and currency
-        const paymentIntent = await stripe.paymentIntents.create({
-            amount: Math.round(amount * 100), // Convert to paise
-            currency: 'inr',
-            metadata: {
+        const amountInPaise = Math.round(amount * 100);
+
+        // Create an Order in Razorpay
+        const options = {
+            amount: amountInPaise,
+            currency: 'INR',
+            receipt: `wallet_${userId}_${Date.now()}`.substring(0, 40),
+            payment_capture: 1, // Auto-capture
+            notes: {
                 userId: userId.toString(),
                 userType,
                 type: 'wallet_topup'
             }
-        });
+        };
 
-        // Create a pending transaction
+        const order = await razorpay.orders.create(options);
+
+        // Create a pending transaction using the Razorpay Order ID as transactionId
         const transaction = new WalletTransaction({
             userId,
             userType,
             amount,
             type: 'credit',
-            description: 'Wallet Top-up via Stripe',
-            transactionId: paymentIntent.id,
+            description: 'Wallet Top-up via Razorpay',
+            transactionId: order.id, // Storing Razorpay Order ID
             status: 'pending'
         });
 
@@ -89,40 +99,43 @@ export const addMoneyIntent = async (req, res) => {
         res.json({
             success: true,
             data: {
-                clientSecret: paymentIntent.client_secret,
-                transactionId: paymentIntent.id
+                orderId: order.id,
+                amount: order.amount,
+                amountInPaise: amountInPaise,
+                currency: order.currency,
+                keyId: process.env.RAZORPAY_KEY_ID || 'rzp_live_ST0TZQUt1IwsqU'
             }
         });
 
     } catch (error) {
-        console.error('Add money intent error:', error);
-        res.status(500).json({ success: false, message: 'Failed to create payment intent' });
+        console.error('Create wallet order error:', error);
+        res.status(500).json({ success: false, message: 'Failed to create payment order' });
     }
 };
 
-// 3. Confirm Add Money
-export const confirmAddMoney = async (req, res) => {
+// 3. Verify Wallet Payment Signature
+export const verifyWalletPayment = async (req, res) => {
     try {
-        const { paymentIntentId } = req.body;
+        const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
 
-        if (!paymentIntentId) {
-            return res.status(400).json({ success: false, message: 'Payment intent ID is required' });
+        if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
+            return res.status(400).json({ success: false, message: 'Payment details and signature are required' });
         }
 
-        // Retrieve the payment intent from Stripe to verify status
-        const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+        // Generate signature for verification
+        const body = razorpay_order_id + "|" + razorpay_payment_id;
+        const expectedSignature = crypto
+            .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET || 'OZdye2d48zaLY1gSko96eJsX')
+            .update(body.toString())
+            .digest('hex');
 
-        if (paymentIntent.status !== 'succeeded') {
-            return res.status(400).json({
-                success: false,
-                message: 'Payment not successful',
-                status: paymentIntent.status
-            });
+        if (expectedSignature !== razorpay_signature) {
+            return res.status(400).json({ success: false, message: 'Payment verification failed - invalid signature' });
         }
 
-        // Find the pending transaction
+        // Find the pending transaction via razorpay_order_id
         const transaction = await WalletTransaction.findOne({
-            transactionId: paymentIntentId
+            transactionId: razorpay_order_id
         });
 
         if (!transaction) {
@@ -135,26 +148,32 @@ export const confirmAddMoney = async (req, res) => {
 
         // Payment is successful, update transaction and wallet balance
         transaction.status = 'completed';
+        // Store the actual payment ID now that it's verified (optional: can keep order ID and store payment ID in metadata if we had a metadata field)
+        // Since WalletTransaction schema might only have `transactionId`, we'll leave it as order.id or append payment ID.
+        
         await transaction.save();
 
         const userModel = transaction.userType === 'Customer' ? Customer : Driver;
 
         // Add amount to user's wallet
-        await userModel.findByIdAndUpdate(transaction.userId, {
-            $inc: { walletBalance: transaction.amount }
-        });
+        const updatedUser = await userModel.findByIdAndUpdate(
+            transaction.userId,
+            { $inc: { walletBalance: transaction.amount } },
+            { new: true }
+        );
 
         res.json({
             success: true,
             message: 'Wallet balance updated successfully',
             data: {
                 amountAdded: transaction.amount,
-                newBalance: (await userModel.findById(transaction.userId)).walletBalance
+                newBalance: updatedUser.walletBalance,
+                transactionId: razorpay_payment_id
             }
         });
 
     } catch (error) {
-        console.error('Confirm add money error:', error);
-        res.status(500).json({ success: false, message: 'Failed to confirm transaction' });
+        console.error('Verify wallet payment error:', error);
+        res.status(500).json({ success: false, message: 'Failed to verify transaction' });
     }
 };

@@ -3,6 +3,9 @@ import Razorpay from 'razorpay';
 import Ride from '../models/Ride.js';
 import Payment from '../models/Payment.js';
 import crypto from 'crypto';
+import WalletTransaction from '../models/WalletTransaction.js';
+import Customer from '../models/Customer.js';
+import Driver from '../models/Driver.js';
 
 // Initialize Razorpay with your live keys
 const razorpay = new Razorpay({
@@ -346,6 +349,25 @@ export const handleRazorpayWebhook = async (req, res) => {
                     method: paymentEntity.method
                 });
 
+                // Check if this is a wallet top-up
+                if (paymentEntity.notes && paymentEntity.notes.type === 'wallet_topup') {
+                    console.log('💳 Processing Wallet Top-up webhook');
+                    const transaction = await WalletTransaction.findOne({ transactionId: orderId });
+                    
+                    if (transaction && transaction.status === 'pending') {
+                        transaction.status = 'completed';
+                        await transaction.save();
+                        
+                        const userModel = transaction.userType === 'Customer' ? Customer : Driver;
+                        await userModel.findByIdAndUpdate(
+                            transaction.userId,
+                            { $inc: { walletBalance: transaction.amount } }
+                        );
+                        console.log(`✅ Wallet balance updated for ${transaction.userType}:`, transaction.userId);
+                    }
+                    break;
+                }
+
                 // Find ride by paymentIntentId (which stores Razorpay order ID)
                 const ride = await Ride.findOne({ paymentIntentId: orderId });
                 
@@ -397,6 +419,18 @@ export const handleRazorpayWebhook = async (req, res) => {
                     paymentId: failedPayment.id,
                     error: failedPayment.error_description
                 });
+
+                // Check if this is a wallet top-up failure
+                if (failedPayment.notes && failedPayment.notes.type === 'wallet_topup') {
+                    console.log('💳 Wallet Top-up failed webhook');
+                    const failedTx = await WalletTransaction.findOne({ transactionId: failedOrderId });
+                    if (failedTx && failedTx.status === 'pending') {
+                        failedTx.status = 'failed';
+                        await failedTx.save();
+                        console.log('❌ Wallet transaction marked as failed');
+                    }
+                    break;
+                }
 
                 const failedRide = await Ride.findOne({ paymentIntentId: failedOrderId });
                 if (failedRide) {

@@ -7,6 +7,11 @@ const vehicleSchema = new mongoose.Schema({
     unique: true,
     trim: true
   },
+  category: {
+    type: String,
+    enum: ['2 Wheelers', '3 Wheelers', '4 Wheelers', 'Other'],
+    default: 'Other'
+  },
   name: {
     type: String,
     required: [true, 'Vehicle name is required'],
@@ -31,13 +36,17 @@ const vehicleSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
-  image: {
-    url: {
-      type: String
-    },
-    publicId: {
-      type: String
-    }
+  image_1: {
+    url: String,
+    publicId: String
+  },
+  image_2: {
+    url: String,
+    publicId: String
+  },
+  image_3: {
+    url: String,
+    publicId: String
   },
   isActive: {
     type: Boolean,

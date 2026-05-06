@@ -1,5 +1,5 @@
 import express from 'express';
-import { getWalletBalance, addMoneyIntent, confirmAddMoney } from '../controllers/walletController.js';
+import { getWalletBalance, createWalletOrder, verifyWalletPayment } from '../controllers/walletController.js';
 import { customerAuthMiddleware } from '../middleware/customerAuthMiddleware.js';
 import driverAuthMiddleware from '../middleware/driverAuthMiddleware.js';
 
@@ -7,12 +7,12 @@ const router = express.Router();
 
 // ==================== CUSTOMER ROUTES ====================
 router.get('/customer/balance', customerAuthMiddleware, getWalletBalance);
-router.post('/customer/add-money', customerAuthMiddleware, addMoneyIntent);
-router.post('/customer/confirm', customerAuthMiddleware, confirmAddMoney);
+router.post('/customer/create-order', customerAuthMiddleware, createWalletOrder);
+router.post('/customer/verify', customerAuthMiddleware, verifyWalletPayment);
 
 // ==================== DRIVER ROUTES ====================
 router.get('/driver/balance', driverAuthMiddleware, getWalletBalance);
-router.post('/driver/add-money', driverAuthMiddleware, addMoneyIntent);
-router.post('/driver/confirm', driverAuthMiddleware, confirmAddMoney);
+router.post('/driver/create-order', driverAuthMiddleware, createWalletOrder);
+router.post('/driver/verify', driverAuthMiddleware, verifyWalletPayment);
 
 export default router;

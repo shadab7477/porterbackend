@@ -597,7 +597,7 @@ export const requestRide = async (req, res) => {
 
     // Calculate fare based on total cumulative distance (merchant gets 5% discount)
     const isMerchant = customer.isMerchant || false;
-    const fare = Ride.calculateFare(totalDistance, vehicleType, isMerchant);
+    const fare = await Ride.calculateFare(totalDistance, vehicleType, isMerchant);
 
 
     // The final/last drop location for backward compatibility
@@ -2277,7 +2277,7 @@ export const calculateFareEstimate = async (req, res) => {
     totalDistance = parseFloat(totalDistance.toFixed(2));
 
     // Calculate fare based on total cumulative distance
-    const fare = Ride.calculateFare(totalDistance, vehicleType);
+    const fare = await Ride.calculateFare(totalDistance, vehicleType);
 
     const nearbyDriversResult = await Driver.aggregate([
       {

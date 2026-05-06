@@ -29,11 +29,11 @@ router.post('/calculate-fare', calculateFare);
 
 // Image routes - Single image only
 router.post(
-  '/:id/image',
+  '/:id/image/:index',
   upload.single('image'),
   handleMulterError,
   uploadVehicleImage
 );
-router.delete('/:id/image', deleteVehicleImage);
+router.delete('/:id/image/:index', deleteVehicleImage);
 
 export default router;

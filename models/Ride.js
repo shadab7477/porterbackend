@@ -272,23 +272,26 @@ rideSchema.methods.updateStatus = function (status) {
 };
 
 // Static method to calculate fare — per-km rates + optional merchant 5% discount
-rideSchema.statics.calculateFare = function (distance, vehicleType = 'car', isMerchant = false) {
-  const perKmRates = {
-    // 2 Wheelers
-    'bike':       15,
-    'scooty':     15,
-    // 3 Wheelers
-    'auto':       35,
-    'mini_3w':    35,
-    'e_loader':   45,
-    // 4 Wheelers
-    'car':        105,
-    'tata_ace':   105,
-    'mini_truck': 105,
-    'truck':      105
-  };
+rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car', isMerchant = false) {
+  let ratePerKm = 105; // Fallback default
+  try {
+    const Vehicle = mongoose.model('Vehicle');
+    const vehicle = await Vehicle.findOne({ vehicleType: vehicleType.toLowerCase() });
+    if (vehicle && vehicle.isActive) {
+      ratePerKm = vehicle.pricePerKm;
+    } else {
+      // Fallback hardcoded rates for existing app compatibility
+      const fallbacks = {
+        'bike': 15, 'scooty': 15,
+        'auto': 35, 'mini_3w': 35, 'e_loader': 45,
+        'car': 105, 'tata_ace': 105, 'mini_truck': 105, 'truck': 105
+      };
+      ratePerKm = fallbacks[vehicleType.toLowerCase()] || 105;
+    }
+  } catch (err) {
+    console.error('Error fetching dynamic vehicle pricing:', err);
+  }
 
-  const ratePerKm   = perKmRates[vehicleType] || perKmRates.car;
   const totalFare   = distance * ratePerKm;
   const roundedTotal = Math.round(totalFare);
 

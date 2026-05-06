@@ -56,7 +56,7 @@ export const getVehicleByType = async (req, res) => {
 
 export const createVehicle = async (req, res) => {
   try {
-    const { vehicleType, name, baseFare, pricePerKm, capacity, description } = req.body;
+    const { vehicleType, category, name, baseFare, pricePerKm, capacity, description } = req.body;
     
     const existingVehicle = await Vehicle.findOne({ vehicleType });
     if (existingVehicle) {
@@ -65,6 +65,7 @@ export const createVehicle = async (req, res) => {
     
     const vehicle = new Vehicle({
       vehicleType,
+      category,
       name,
       baseFare,
       pricePerKm,
@@ -171,8 +172,14 @@ export const getActiveVehicles = async (req, res) => {
 
 export const uploadVehicleImage = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { id, index } = req.params;
     const file = req.file;
+
+    if (!['1', '2', '3'].includes(index)) {
+      return res.status(400).json({ success: false, message: 'Invalid image index (must be 1, 2, or 3)' });
+    }
+
+    const imageField = `image_${index}`;
 
     if (!file) {
       return res.status(400).json({
@@ -190,15 +197,15 @@ export const uploadVehicleImage = async (req, res) => {
     }
 
     // Delete old image from Cloudinary if exists
-    if (vehicle.image && vehicle.image.publicId) {
-      await deleteFromCloudinary(vehicle.image.publicId);
+    if (vehicle[imageField] && vehicle[imageField].publicId) {
+      await deleteFromCloudinary(vehicle[imageField].publicId);
     }
 
     // Upload new image to Cloudinary
     const uploadedImage = await uploadToCloudinary(file.buffer, 'vehicles');
 
     // Update vehicle with new image
-    vehicle.image = {
+    vehicle[imageField] = {
       url: uploadedImage.url,
       publicId: uploadedImage.publicId
     };
@@ -206,14 +213,15 @@ export const uploadVehicleImage = async (req, res) => {
     await vehicle.save();
 
     const io = req.app.get('io');
-    io.emit('vehicle:image:uploaded', { vehicleId: id, image: vehicle.image });
+    io.emit('vehicle:image:uploaded', { vehicleId: id, index, image: vehicle[imageField] });
 
     res.json({
       success: true,
       message: 'Image uploaded successfully',
       data: {
         vehicleId: id,
-        image: vehicle.image
+        index,
+        image: vehicle[imageField]
       }
     });
   } catch (error) {
@@ -228,7 +236,11 @@ export const uploadVehicleImage = async (req, res) => {
 
 export const deleteVehicleImage = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { id, index } = req.params;
+    if (!['1', '2', '3'].includes(index)) {
+      return res.status(400).json({ success: false, message: 'Invalid image index (must be 1, 2, or 3)' });
+    }
+    const imageField = `image_${index}`;
 
     const vehicle = await Vehicle.findById(id);
     if (!vehicle) {
@@ -238,28 +250,29 @@ export const deleteVehicleImage = async (req, res) => {
       });
     }
 
-    if (!vehicle.image || !vehicle.image.publicId) {
+    if (!vehicle[imageField] || !vehicle[imageField].publicId) {
       return res.status(404).json({
         success: false,
-        message: 'No image found for this vehicle'
+        message: 'No image found for this vehicle at this index'
       });
     }
 
     // Delete from Cloudinary
-    await deleteFromCloudinary(vehicle.image.publicId);
+    await deleteFromCloudinary(vehicle[imageField].publicId);
 
     // Remove image from vehicle
-    vehicle.image = undefined;
+    vehicle[imageField] = undefined;
     await vehicle.save();
 
     const io = req.app.get('io');
-    io.emit('vehicle:image:deleted', { vehicleId: id });
+    io.emit('vehicle:image:deleted', { vehicleId: id, index });
 
     res.json({
       success: true,
       message: 'Image deleted successfully',
       data: {
         vehicleId: id,
+        index,
         image: null
       }
     });
