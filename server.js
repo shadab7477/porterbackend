@@ -55,22 +55,34 @@ const allowedOrigins = [
   "http://localhost:3000"
 ];
 
-// Dynamic CORS function
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true;
+  if (origin.startsWith("http://localhost") || origin.startsWith("http://127.0.0.1")) return true;
+  return allowedOrigins.includes(origin);
+};
+
+// Manually set headers BEFORE cors() middleware so we override any NGINX-added headers.
+// This prevents the "multiple values" bug caused by NGINX also adding Access-Control-Allow-Origin.
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (isAllowedOrigin(origin)) {
+    // setHeader always REPLACES (not appends), so only one value is ever sent.
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With');
+  }
+  // Handle preflight immediately
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
+// cors() middleware kept for fallback compatibility
 const corsOptions = {
-  origin: function (origin, callback) {
-    // allow no origin (Postman, mobile apps)
-    if (!origin) return callback(null, true);
-
-    // allow localhost any port
-    if (origin.startsWith("http://localhost") || origin.startsWith("http://127.0.0.1")) {
-      return callback(null, true);
-    }
-
-    // allow listed domains
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-
+  origin: (origin, callback) => {
+    if (isAllowedOrigin(origin)) return callback(null, true);
     return callback(new Error("CORS not allowed: " + origin), false);
   },
   credentials: true
@@ -84,24 +96,18 @@ app.use(cors(corsOptions));
 const io = new Server(server, {
   cors: {
     origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-
-      if (
-        origin.startsWith("http://localhost") ||
-        origin.startsWith("http://127.0.0.1") ||
-        allowedOrigins.includes(origin)
-      ) {
-        callback(null, true);
-      } else {
-        callback("Socket CORS not allowed: " + origin);
-      }
+      if (isAllowedOrigin(origin)) return callback(null, true);
+      callback(new Error("Socket CORS not allowed: " + origin));
     },
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE"],
-    credentials: true
+    credentials: true,
+    // Prevent Socket.IO from also emitting a header that NGINX then duplicates
+    allowedHeaders: ['Content-Type', 'Authorization'],
   },
   pingTimeout: 60000,
   pingInterval: 25000,
-  transports: ['websocket', 'polling']
+  transports: ['websocket', 'polling'],
+  allowEIO3: true,
 });
 
 
