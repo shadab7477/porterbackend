@@ -1,6 +1,7 @@
 import Ride from '../models/Ride.js';
 import Driver from '../models/Driver.js';
 import Customer from '../models/Customer.js';
+import WalletTransaction from '../models/WalletTransaction.js';
 import axios from 'axios';
 
 // Google Maps API configuration
@@ -1216,12 +1217,76 @@ export const completeRide = async (req, res) => {
       ride.paymentStatus = 'completed';
     }
 
+    // ====== WALLET ACCOUNTING LOGIC ======
+    const commissionAmount = ride.fare.finalAmount * 0.20;
+    const driverEarning = ride.fare.finalAmount - commissionAmount;
+
+    ride.fare.commissionAmount = commissionAmount;
+    ride.fare.driverEarning = driverEarning;
+
     await ride.save();
+
+    let transactionAmount = 0;
+    let txType = '';
+    let category = '';
+    let description = '';
+
+    if (ride.paymentMethod === 'cash') {
+      // Driver has cash, so platform deducts commission from wallet
+      transactionAmount = -commissionAmount;
+      txType = 'debit';
+      category = 'commission_due';
+      description = 'Cash order commission';
+    } else {
+      // Platform has money, so platform credits earning to driver wallet
+      transactionAmount = driverEarning;
+      txType = 'credit';
+      category = 'online_order_credit';
+      description = 'Online order credit';
+    }
+
+    const previousBalance = driver.walletBalance;
+    driver.walletBalance += transactionAmount;
+
+    // Dynamic Due Limits based on vehicle
+    const dueLimits = {
+      bike: 300,
+      scooty: 300,
+      auto: 700,
+      mini_3w: 700,
+      e_loader: 700,
+      car: 700,
+      tata_ace: 700,
+      mini_truck: 700,
+      truck: 700
+    };
+    
+    const vType = (driver.vehicleType || 'bike').toLowerCase();
+    const limit = dueLimits[vType] || 300;
+
+    if (driver.walletBalance <= -limit) {
+      driver.isBlocked = true;
+      driver.blockReason = 'due_limit_exceeded';
+    }
 
     driver.totalTrips += 1;
     driver.totalEarnings += ride.fare.finalAmount;
     driver.isAvailable = true;
     await driver.save();
+
+    await WalletTransaction.create({
+      userId: driver._id,
+      userType: 'Driver',
+      amount: transactionAmount,
+      type: txType,
+      transactionCategory: category,
+      description: description,
+      previousBalance: previousBalance,
+      newBalance: driver.walletBalance,
+      orderId: ride._id,
+      status: 'completed'
+    });
+    // =====================================
 
     const io = req.app.get('io');
     io.emit(`ride:${ride.rideId}:completed`, {

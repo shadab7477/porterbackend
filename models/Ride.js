@@ -110,6 +110,8 @@ const rideSchema = new mongoose.Schema({
     total: { type: Number, required: true },
     discount: { type: Number, default: 0 },
     finalAmount: { type: Number, required: true },
+    commissionAmount: { type: Number, default: 0 },
+    driverEarning: { type: Number, default: 0 },
     isMerchantRide: { type: Boolean, default: false },
     merchantDiscount: { type: Number, default: 0 }  // percentage applied
   },
@@ -292,7 +294,17 @@ rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car'
     console.error('Error fetching dynamic vehicle pricing:', err);
   }
 
-  const totalFare   = distance * ratePerKm;
+  let totalFare = 0;
+  if (distance <= 5) {
+    totalFare = distance * ratePerKm;
+  } else {
+    const firstTierFare = 5 * ratePerKm;
+    const remainingDistance = distance - 5;
+    const discountedRatePerKm = ratePerKm * 0.95; // 5% drop in rate per km after 5km
+    const secondTierFare = remainingDistance * discountedRatePerKm;
+    totalFare = firstTierFare + secondTierFare;
+  }
+
   const roundedTotal = Math.round(totalFare);
 
   // Apply merchant 5% discount

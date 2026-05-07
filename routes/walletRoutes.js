@@ -1,5 +1,5 @@
 import express from 'express';
-import { getWalletBalance, createWalletOrder, verifyWalletPayment } from '../controllers/walletController.js';
+import { getWalletBalance, createWalletOrder, verifyWalletPayment, requestWithdrawal } from '../controllers/walletController.js';
 import { customerAuthMiddleware } from '../middleware/customerAuthMiddleware.js';
 import driverAuthMiddleware from '../middleware/driverAuthMiddleware.js';
 
@@ -14,5 +14,6 @@ router.post('/customer/verify', customerAuthMiddleware, verifyWalletPayment);
 router.get('/driver/balance', driverAuthMiddleware, getWalletBalance);
 router.post('/driver/create-order', driverAuthMiddleware, createWalletOrder);
 router.post('/driver/verify', driverAuthMiddleware, verifyWalletPayment);
+router.post('/driver/withdraw', driverAuthMiddleware, requestWithdrawal);
 
 export default router;

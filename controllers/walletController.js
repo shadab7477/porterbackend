@@ -156,11 +156,34 @@ export const verifyWalletPayment = async (req, res) => {
         const userModel = transaction.userType === 'Customer' ? Customer : Driver;
 
         // Add amount to user's wallet
+        const previousBalance = transaction.userType === 'Customer' 
+            ? (await Customer.findById(transaction.userId)).walletBalance 
+            : (await Driver.findById(transaction.userId)).walletBalance;
+
         const updatedUser = await userModel.findByIdAndUpdate(
             transaction.userId,
             { $inc: { walletBalance: transaction.amount } },
             { new: true }
         );
+
+        // Update transaction ledger details
+        transaction.previousBalance = previousBalance;
+        transaction.newBalance = updatedUser.walletBalance;
+        transaction.transactionCategory = 'wallet_recharge';
+        await transaction.save();
+
+        // Check for unblocking driver if balance improves
+        if (transaction.userType === 'Driver' && updatedUser.isBlocked && updatedUser.blockReason === 'due_limit_exceeded') {
+            const dueLimits = { bike: 300, scooty: 300, auto: 700, mini_3w: 700, e_loader: 700, car: 700, tata_ace: 700, mini_truck: 700, truck: 700 };
+            const vType = (updatedUser.vehicleType || 'bike').toLowerCase();
+            const limit = dueLimits[vType] || 300;
+            
+            if (updatedUser.walletBalance > -limit) {
+                updatedUser.isBlocked = false;
+                updatedUser.blockReason = null;
+                await updatedUser.save();
+            }
+        }
 
         res.json({
             success: true,
@@ -175,5 +198,65 @@ export const verifyWalletPayment = async (req, res) => {
     } catch (error) {
         console.error('Verify wallet payment error:', error);
         res.status(500).json({ success: false, message: 'Failed to verify transaction' });
+    }
+};
+
+// 4. Request Withdrawal (For Drivers)
+export const requestWithdrawal = async (req, res) => {
+    try {
+        const driverId = req.driver?.id;
+        const { amount } = req.body;
+
+        if (!driverId) {
+            return res.status(401).json({ success: false, message: 'Unauthorized' });
+        }
+
+        if (!amount || amount <= 0) {
+            return res.status(400).json({ success: false, message: 'Valid amount is required' });
+        }
+
+        const driver = await Driver.findById(driverId);
+        if (!driver) {
+            return res.status(404).json({ success: false, message: 'Driver not found' });
+        }
+
+        // Check if driver has sufficient positive balance
+        if (driver.walletBalance < amount) {
+            return res.status(400).json({ success: false, message: `Insufficient balance. Your withdrawable balance is ₹${Math.max(0, driver.walletBalance)}` });
+        }
+
+        const previousBalance = driver.walletBalance;
+        
+        // Deduct from wallet immediately
+        driver.walletBalance -= amount;
+        await driver.save();
+
+        // Create transaction record
+        const transaction = new WalletTransaction({
+            userId: driver._id,
+            userType: 'Driver',
+            amount: -amount,
+            type: 'debit',
+            transactionCategory: 'withdrawal',
+            description: 'Withdrawal request',
+            previousBalance: previousBalance,
+            newBalance: driver.walletBalance,
+            status: 'pending' // pending until admin approves/processes
+        });
+        await transaction.save();
+
+        res.json({
+            success: true,
+            message: 'Withdrawal request submitted successfully',
+            data: {
+                transactionId: transaction._id,
+                amountWithdrawn: amount,
+                newBalance: driver.walletBalance
+            }
+        });
+
+    } catch (error) {
+        console.error('Request withdrawal error:', error);
+        res.status(500).json({ success: false, message: 'Failed to process withdrawal' });
     }
 };

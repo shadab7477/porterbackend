@@ -21,6 +21,24 @@ const walletTransactionSchema = new mongoose.Schema({
         enum: ['credit', 'debit'], // credit = money added/earned, debit = money spent/withdrawn
         required: true
     },
+    transactionCategory: {
+        type: String,
+        enum: ['commission_due', 'online_order_credit', 'wallet_recharge', 'manual_adjustment', 'withdrawal', 'penalty', 'bonus', 'incentive', 'refund', 'other'],
+        default: 'other'
+    },
+    previousBalance: {
+        type: Number,
+        default: 0
+    },
+    newBalance: {
+        type: Number,
+        default: 0
+    },
+    orderId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Ride',
+        sparse: true
+    },
     description: {
         type: String,
         required: true

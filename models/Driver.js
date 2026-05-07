@@ -73,6 +73,10 @@ const driverSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  blockReason: {
+    type: String,
+    default: null
+  },
   totalEarnings: {
     type: Number,
     default: 0
