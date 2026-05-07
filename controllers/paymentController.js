@@ -310,6 +310,78 @@ export const getPaymentStatus = async (req, res) => {
     }
 };
 
+// ==================== GET PAYMENT HISTORY ====================
+export const getPaymentHistory = async (req, res) => {
+    try {
+        const customerId = req.customerId;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+
+        // Fetch wallet transactions
+        const walletTransactions = await WalletTransaction.find({ 
+            userId: customerId, 
+            userType: 'Customer' 
+        });
+
+        // Fetch ride payments
+        const payments = await Payment.find({ customerId })
+            .populate('orderId', 'rideId pickupLocation dropLocation');
+
+        // Combine into unified timeline
+        const combinedHistory = [
+            ...walletTransactions.map(w => ({
+                id: w._id,
+                type: 'wallet',
+                transactionType: w.type, // 'credit' or 'debit'
+                amount: w.amount,
+                description: w.description,
+                status: w.status,
+                date: w.createdAt,
+                transactionId: w.transactionId
+            })),
+            ...payments.map(p => ({
+                id: p._id,
+                type: 'ride',
+                method: p.method,
+                amount: p.amount,
+                status: p.status,
+                date: p.createdAt,
+                paymentId: p.paymentId,
+                transactionId: p.transactionId,
+                rideDetails: p.orderId ? {
+                    rideId: p.orderId.rideId,
+                    pickup: p.orderId.pickupLocation?.address,
+                    drop: p.orderId.dropLocation?.address
+                } : null
+            }))
+        ];
+
+        // Sort descending by date
+        combinedHistory.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        // Paginate
+        const paginatedHistory = combinedHistory.slice(skip, skip + limit);
+
+        res.json({
+            success: true,
+            data: paginatedHistory,
+            pagination: {
+                total: combinedHistory.length,
+                page,
+                limit,
+                pages: Math.ceil(combinedHistory.length / limit)
+            }
+        });
+    } catch (error) {
+        console.error('❌ Get payment history error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to fetch payment history'
+        });
+    }
+};
+
 // ==================== RAZORPAY WEBHOOK ====================
 export const handleRazorpayWebhook = async (req, res) => {
     try {
