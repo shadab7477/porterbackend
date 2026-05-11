@@ -507,10 +507,11 @@ export const requestRide = async (req, res) => {
     const customerId = req.customerId;
     const {
       pickupLocation,
-      dropLocation,      // single drop (backward compatibility)
-      dropLocations,     // array of drops (multi-drop)
+      dropLocation,
+      dropLocations,
       vehicleType = 'car',
       paymentMethod = 'cash',
+      paymentCollectedBy = 'customer',  // 'customer' | 'receiver'
       receiver
     } = req.body;
 
@@ -656,9 +657,24 @@ export const requestRide = async (req, res) => {
         merchantDiscount: fare.merchantDiscount
       },
       paymentMethod,
+      paymentCollectedBy: paymentMethod === 'cash' || paymentMethod === 'wallet' ? 'customer' : paymentCollectedBy,
       paymentStatus: 'pending',
       status: 'requested'
     });
+
+    // ====== WALLET: Pre-check balance at booking time ======
+    if (paymentMethod === 'wallet') {
+      const freshCustomer = await Customer.findById(customerId).select('walletBalance');
+      if (!freshCustomer || freshCustomer.walletBalance < fare.finalAmount) {
+        return res.status(400).json({
+          success: false,
+          message: `Insufficient wallet balance. Your balance is ₹${freshCustomer?.walletBalance || 0}, ride fare is ₹${fare.finalAmount}. Please top up your wallet first.`,
+          walletBalance: freshCustomer?.walletBalance || 0,
+          required: fare.finalAmount
+        });
+      }
+    }
+    // ======================================================
 
     await ride.save();
 
@@ -1133,13 +1149,22 @@ export const startRide = async (req, res) => {
       });
     }
 
-    if (ride.paymentMethod !== 'cash' && ride.paymentStatus !== 'completed') {
+    // Payment gate for ONLINE rides:
+    // If customer is paying → payment must be done before ride starts
+    // If receiver is paying → skip check here, will be enforced at completeRide
+    const customerMustPayFirst = ride.paymentMethod !== 'cash'
+      && ride.paymentMethod !== 'wallet'
+      && ride.paymentCollectedBy === 'customer'
+      && ride.paymentStatus !== 'completed';
+
+    if (customerMustPayFirst) {
       return res.status(400).json({
         success: false,
         message: 'Payment must be completed before starting the ride',
         paymentRequired: true,
         paymentStatus: ride.paymentStatus,
         paymentMethod: ride.paymentMethod,
+        paymentCollectedBy: ride.paymentCollectedBy,
         paymentIntentId: ride.paymentIntentId || null,
         amount: ride.fare.finalAmount
       });
@@ -1217,6 +1242,22 @@ export const completeRide = async (req, res) => {
       ride.paymentStatus = 'completed';
     }
 
+    // Block completion if receiver is supposed to pay but hasn't yet
+    if (
+      ride.paymentMethod !== 'cash' &&
+      ride.paymentMethod !== 'wallet' &&
+      ride.paymentCollectedBy === 'receiver' &&
+      ride.paymentStatus !== 'completed'
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Receiver has not paid yet. Please collect payment from receiver before completing.',
+        paymentRequired: true,
+        amount: ride.fare.finalAmount,
+        paymentCollectedBy: 'receiver'
+      });
+    }
+
     // ====== WALLET ACCOUNTING LOGIC ======
     const commissionAmount = ride.fare.finalAmount * 0.20;
     const driverEarning = ride.fare.finalAmount - commissionAmount;
@@ -1238,11 +1279,11 @@ export const completeRide = async (req, res) => {
       category = 'commission_due';
       description = 'Cash order commission';
     } else {
-      // Platform has money, so platform credits earning to driver wallet
+      // Platform has money (online/wallet), so platform credits earning to driver wallet
       transactionAmount = driverEarning;
       txType = 'credit';
       category = 'online_order_credit';
-      description = 'Online order credit';
+      description = ride.paymentMethod === 'wallet' ? 'Wallet order credit' : 'Online order credit';
     }
 
     const previousBalance = driver.walletBalance;
@@ -1274,6 +1315,36 @@ export const completeRide = async (req, res) => {
     driver.isAvailable = true;
     await driver.save();
 
+    // ====== WALLET RIDE: Auto-deduct from customer at completion ======
+    let customerWalletNew = null;
+    if (ride.paymentMethod === 'wallet') {
+      const customer = await Customer.findById(ride.customer.customerId);
+      if (customer) {
+        const custPrevBalance = customer.walletBalance;
+        customer.walletBalance -= ride.fare.finalAmount;
+        if (customer.walletBalance < 0) customer.walletBalance = 0; // safety floor
+        await customer.save();
+        customerWalletNew = customer.walletBalance;
+
+        await WalletTransaction.create({
+          userId: customer._id,
+          userType: 'Customer',
+          amount: -ride.fare.finalAmount,
+          type: 'debit',
+          transactionCategory: 'other',
+          description: `Auto-payment for ride ${ride.rideId}`,
+          previousBalance: custPrevBalance,
+          newBalance: customer.walletBalance,
+          orderId: ride._id,
+          status: 'completed'
+        });
+
+        ride.paymentStatus = 'completed';
+        await ride.save();
+      }
+    }
+    // ===================================================================
+
     await WalletTransaction.create({
       userId: driver._id,
       userType: 'Driver',
@@ -1289,6 +1360,8 @@ export const completeRide = async (req, res) => {
     // =====================================
 
     const io = req.app.get('io');
+
+    // Notify CUSTOMER — ride done + how much was deducted
     io.emit(`ride:${ride.rideId}:completed`, {
       rideId: ride.rideId,
       message: 'Parcel delivered successfully',
@@ -1298,7 +1371,24 @@ export const completeRide = async (req, res) => {
       completedAt: ride.rideCompletedAt,
       actualDistance: finalRouteInfo.distanceText,
       actualDuration: finalRouteInfo.durationText,
-      receiver: ride.receiver
+      receiver: ride.receiver,
+      // Wallet rides — show deduction info to customer
+      ...(ride.paymentMethod === 'wallet' && {
+        walletDeducted: ride.fare.finalAmount,
+        newWalletBalance: customerWalletNew
+      })
+    });
+
+    // Notify DRIVER — earnings credited
+    io.to(`driver:${driverId}`).emit('driver:earnings_credited', {
+      rideId: ride.rideId,
+      message: `₹${driverEarning.toFixed(2)} credited to your wallet`,
+      earning: driverEarning,
+      commission: commissionAmount,
+      totalFare: ride.fare.finalAmount,
+      paymentMethod: ride.paymentMethod,
+      walletBalance: driver.walletBalance,
+      isBlocked: driver.isBlocked || false
     });
 
     res.json({

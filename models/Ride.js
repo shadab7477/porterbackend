@@ -131,6 +131,13 @@ const rideSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  // 'customer' = customer pays before ride starts
+  // 'receiver' = receiver pays at drop location via driver's device
+  paymentCollectedBy: {
+    type: String,
+    enum: ['customer', 'receiver'],
+    default: 'customer'
+  },
 
   // Status Tracking
   status: {

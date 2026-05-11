@@ -1,12 +1,16 @@
 import express from 'express';
 import {
-    createPaymentOrder,  // Changed from createPaymentIntent
-    verifyPayment,       // Changed from confirmPayment
+    createPaymentOrder,
+    verifyPayment,
     getPaymentStatus,
-    getPaymentHistory,   // Added for wallet and other payment history
-    handleRazorpayWebhook
+    getPaymentHistory,
+    handleRazorpayWebhook,
+    createReceiverPaymentOrder,
+    verifyReceiverPayment,
+    payWithWallet
 } from '../controllers/paymentController.js';
 import { customerAuthMiddleware } from '../middleware/customerAuthMiddleware.js';
+import driverAuthMiddleware from '../middleware/driverAuthMiddleware.js';
 
 const router = express.Router();
 
@@ -14,9 +18,14 @@ const router = express.Router();
 router.post('/webhook/razorpay', express.raw({ type: 'application/json' }), handleRazorpayWebhook);
 
 // All payment routes require customer authentication
-router.post('/create-order', customerAuthMiddleware, createPaymentOrder);     // Changed from create-intent
-router.post('/verify', customerAuthMiddleware, verifyPayment);                 // Changed from confirm
-router.get('/history', customerAuthMiddleware, getPaymentHistory);             // New wallet & ride history endpoint
+router.post('/create-order', customerAuthMiddleware, createPaymentOrder);
+router.post('/verify', customerAuthMiddleware, verifyPayment);
+router.post('/wallet/pay', customerAuthMiddleware, payWithWallet);   // Instant wallet deduction
+router.get('/history', customerAuthMiddleware, getPaymentHistory);
 router.get('/:rideId/status', customerAuthMiddleware, getPaymentStatus);
+
+// Driver collects payment from receiver at drop location
+router.post('/receiver/create-order', driverAuthMiddleware, createReceiverPaymentOrder);
+router.post('/receiver/verify', driverAuthMiddleware, verifyReceiverPayment);
 
 export default router;

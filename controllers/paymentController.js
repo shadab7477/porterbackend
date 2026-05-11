@@ -12,7 +12,6 @@ const razorpay = new Razorpay({
     key_id: process.env.RAZORPAY_KEY_ID || 'rzp_live_ST0TZQUt1IwsqU',
     key_secret: process.env.RAZORPAY_KEY_SECRET || 'OZdye2d48zaLY1gSko96eJsX'
 });
-
 // ==================== CREATE PAYMENT ORDER ====================
 export const createPaymentOrder = async (req, res) => {
     try {
@@ -612,6 +611,321 @@ export const refundPayment = async (req, res) => {
         res.status(500).json({
             success: false,
             message: error.message || 'Failed to process refund'
+        });
+    }
+};
+
+// ==================== PAY WITH WALLET ====================
+// Called by the CUSTOMER APP right after booking (or when payment_required fires).
+// Instantly deducts from customer walletBalance and marks ride as paid.
+export const payWithWallet = async (req, res) => {
+    try {
+        const customerId = req.customerId;
+        const { rideId } = req.body;
+
+        if (!rideId) {
+            return res.status(400).json({ success: false, message: 'rideId is required' });
+        }
+
+        const ride = await Ride.findOne({ rideId, 'customer.customerId': customerId });
+        if (!ride) {
+            return res.status(404).json({ success: false, message: 'Ride not found' });
+        }
+
+        // Only for wallet payment rides
+        if (ride.paymentMethod !== 'wallet') {
+            return res.status(400).json({
+                success: false,
+                message: `This ride uses ${ride.paymentMethod} payment, not wallet`
+            });
+        }
+
+        // Already paid — just confirm
+        if (ride.paymentStatus === 'completed') {
+            return res.json({
+                success: true,
+                message: 'Payment already completed',
+                data: { rideId: ride.rideId, paymentStatus: 'completed' }
+            });
+        }
+
+        const amount = ride.fare.finalAmount;
+
+        // Get customer and check balance
+        const customer = await Customer.findById(customerId);
+        if (!customer) {
+            return res.status(404).json({ success: false, message: 'Customer not found' });
+        }
+
+        if (customer.walletBalance < amount) {
+            return res.status(400).json({
+                success: false,
+                message: `Insufficient wallet balance. Balance: ₹${customer.walletBalance}, Required: ₹${amount}`,
+                walletBalance: customer.walletBalance,
+                required: amount
+            });
+        }
+
+        const previousBalance = customer.walletBalance;
+
+        // Deduct from wallet
+        customer.walletBalance -= amount;
+        await customer.save();
+
+        // Mark ride as paid
+        ride.paymentStatus = 'completed';
+        await ride.save();
+
+        // Create ledger entry
+        await WalletTransaction.create({
+            userId: customerId,
+            userType: 'Customer',
+            amount: -amount,
+            type: 'debit',
+            transactionCategory: 'other',
+            description: `Ride payment for ${rideId}`,
+            previousBalance: previousBalance,
+            newBalance: customer.walletBalance,
+            orderId: ride._id,
+            status: 'completed'
+        });
+
+        // Create Payment record for history
+        await Payment.create({
+            paymentId: `wallet_${rideId}_${Date.now()}`,
+            orderId: ride._id,
+            customerId,
+            amount,
+            method: 'wallet',
+            status: 'success',
+            transactionId: `wallet_${rideId}`,
+            paidAt: new Date(),
+            metadata: { source: 'wallet', previousBalance, newBalance: customer.walletBalance }
+        });
+
+        console.log(`✅ Wallet payment done for ride ${rideId}. Deducted ₹${amount}`);
+
+        // Notify driver via socket — they can now start the ride
+        const io = req.app.get('io');
+        if (io) {
+            io.emit(`ride:${ride.rideId}:payment_confirmed`, {
+                rideId: ride.rideId,
+                message: 'Customer paid via wallet. You can now start the ride.',
+                amount,
+                paymentMethod: 'wallet'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: `₹${amount} deducted from wallet. Ride payment complete.`,
+            data: {
+                rideId: ride.rideId,
+                paymentStatus: 'completed',
+                amountDeducted: amount,
+                walletBalance: customer.walletBalance
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Wallet payment error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to process wallet payment'
+        });
+    }
+};
+
+// ==================== RECEIVER PAYMENT — CREATE ORDER ====================
+// Called by the DRIVER APP when they reach the drop location.
+// Creates a Razorpay order that the receiver pays via UPI/QR code.
+export const createReceiverPaymentOrder = async (req, res) => {
+    try {
+        const driverId = req.driver?.id;
+        const { rideId } = req.body;
+
+        if (!rideId) {
+            return res.status(400).json({ success: false, message: 'rideId is required' });
+        }
+
+        // Find ride and confirm this driver owns it
+        const ride = await Ride.findOne({
+            rideId,
+            'driver.driverId': driverId,
+            status: { $in: ['in_progress', 'driver_arrived'] }
+        });
+
+        if (!ride) {
+            return res.status(404).json({
+                success: false,
+                message: 'Active ride not found or you are not the assigned driver'
+            });
+        }
+
+        // Only for online/UPI payment rides
+        if (ride.paymentMethod === 'cash') {
+            return res.status(400).json({
+                success: false,
+                message: 'This is a cash ride. No digital payment required from receiver.'
+            });
+        }
+
+        // If already paid, no need to create a new order
+        if (ride.paymentStatus === 'completed') {
+            return res.json({
+                success: true,
+                message: 'Payment already completed',
+                data: { rideId: ride.rideId, paymentStatus: 'completed' }
+            });
+        }
+
+        const amountInPaise = Math.round(ride.fare.finalAmount * 100);
+
+        const order = await razorpay.orders.create({
+            amount: amountInPaise,
+            currency: 'INR',
+            receipt: `recv_${ride.rideId}`.substring(0, 40),
+            payment_capture: 1,
+            notes: {
+                rideId: ride.rideId,
+                type: 'receiver_payment',
+                receiverName: ride.receiver?.name || 'Receiver',
+                receiverPhone: ride.receiver?.phone || '',
+                dropAddress: ride.dropLocation.address
+            }
+        });
+
+        console.log('✅ Receiver payment order created:', order.id, 'for ride:', rideId);
+
+        // Store order ID on ride
+        ride.paymentIntentId = order.id;
+        ride.paymentStatus = 'processing';
+        await ride.save();
+
+        // Create a Payment record
+        await Payment.create({
+            paymentId: order.id,
+            orderId: ride._id,
+            customerId: ride.customer.customerId,
+            amount: ride.fare.finalAmount,
+            method: ride.paymentMethod,
+            status: 'pending',
+            transactionId: order.id,
+            metadata: { source: 'receiver_payment', driverId, rideId }
+        });
+
+        res.json({
+            success: true,
+            message: 'Payment order created. Show QR/link to receiver.',
+            data: {
+                orderId: order.id,
+                amount: ride.fare.finalAmount,
+                amountInPaise,
+                currency: 'INR',
+                keyId: process.env.RAZORPAY_KEY_ID || 'rzp_live_ST0TZQUt1IwsqU',
+                receiverName: ride.receiver?.name || 'Receiver',
+                receiverPhone: ride.receiver?.phone || '',
+                rideId: ride.rideId
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Create receiver payment order error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to create receiver payment order'
+        });
+    }
+};
+
+// ==================== RECEIVER PAYMENT — VERIFY ====================
+// Called by the DRIVER APP after the receiver has scanned and paid.
+// Verifies signature and marks ride payment as completed.
+export const verifyReceiverPayment = async (req, res) => {
+    try {
+        const driverId = req.driver?.id;
+        const { rideId, razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
+
+        if (!rideId || !razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
+            return res.status(400).json({
+                success: false,
+                message: 'rideId, payment_id, order_id and signature are all required'
+            });
+        }
+
+        const ride = await Ride.findOne({
+            rideId,
+            'driver.driverId': driverId
+        });
+
+        if (!ride) {
+            return res.status(404).json({ success: false, message: 'Ride not found' });
+        }
+
+        // Verify Razorpay signature
+        const body = razorpay_order_id + '|' + razorpay_payment_id;
+        const expectedSignature = crypto
+            .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET || 'OZdye2d48zaLY1gSko96eJsX')
+            .update(body)
+            .digest('hex');
+
+        if (expectedSignature !== razorpay_signature) {
+            return res.status(400).json({
+                success: false,
+                message: 'Payment verification failed — invalid signature'
+            });
+        }
+
+        // Mark ride payment as completed
+        ride.paymentStatus = 'completed';
+        await ride.save();
+
+        // Update payment record
+        await Payment.findOneAndUpdate(
+            { paymentId: razorpay_order_id },
+            {
+                status: 'success',
+                transactionId: razorpay_payment_id,
+                paidAt: new Date(),
+                metadata: {
+                    paymentId: razorpay_payment_id,
+                    source: 'receiver_payment',
+                    verifiedAt: new Date().toISOString()
+                }
+            }
+        );
+
+        console.log('✅ Receiver payment verified for ride:', rideId);
+
+        // Notify via socket — driver app can now call /rides/complete
+        const io = req.app.get('io');
+        if (io) {
+            io.emit(`ride:${ride.rideId}:payment_confirmed`, {
+                rideId: ride.rideId,
+                message: 'Receiver payment confirmed. You can now complete the ride.',
+                paymentId: razorpay_payment_id,
+                amount: ride.fare.finalAmount,
+                paidBy: 'receiver'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Receiver payment verified. Ride can now be completed.',
+            data: {
+                rideId: ride.rideId,
+                paymentStatus: 'completed',
+                paymentId: razorpay_payment_id,
+                amount: ride.fare.finalAmount,
+                paidBy: 'receiver'
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Verify receiver payment error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to verify receiver payment'
         });
     }
 };
