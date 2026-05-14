@@ -142,31 +142,39 @@ export const verifyWalletPayment = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Transaction record not found' });
         }
 
+        // If already processed (e.g. duplicate webhook / retry), return success with current balance
         if (transaction.status === 'completed') {
-            return res.json({ success: true, message: 'Transaction already processed' });
+            const userModel = transaction.userType === 'Customer' ? Customer : Driver;
+            const user = await userModel.findById(transaction.userId);
+            return res.json({
+                success: true,
+                message: 'Transaction already processed',
+                data: {
+                    amountAdded: transaction.amount,
+                    newBalance: user?.walletBalance ?? transaction.newBalance,
+                    transactionId: razorpay_payment_id
+                }
+            });
         }
-
-        // Payment is successful, update transaction and wallet balance
-        transaction.status = 'completed';
-        // Store the actual payment ID now that it's verified (optional: can keep order ID and store payment ID in metadata if we had a metadata field)
-        // Since WalletTransaction schema might only have `transactionId`, we'll leave it as order.id or append payment ID.
-        
-        await transaction.save();
 
         const userModel = transaction.userType === 'Customer' ? Customer : Driver;
 
-        // Add amount to user's wallet
-        const previousBalance = transaction.userType === 'Customer' 
-            ? (await Customer.findById(transaction.userId)).walletBalance 
-            : (await Driver.findById(transaction.userId)).walletBalance;
+        // Capture previous balance BEFORE updating wallet
+        const userBefore = await userModel.findById(transaction.userId);
+        if (!userBefore) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+        const previousBalance = userBefore.walletBalance || 0;
 
+        // Add amount to user's wallet
         const updatedUser = await userModel.findByIdAndUpdate(
             transaction.userId,
             { $inc: { walletBalance: transaction.amount } },
             { new: true }
         );
 
-        // Update transaction ledger details
+        // Mark transaction complete and record ledger details in a SINGLE save
+        transaction.status = 'completed';
         transaction.previousBalance = previousBalance;
         transaction.newBalance = updatedUser.walletBalance;
         transaction.transactionCategory = 'wallet_recharge';
@@ -177,7 +185,7 @@ export const verifyWalletPayment = async (req, res) => {
             const dueLimits = { bike: 300, scooty: 300, auto: 700, mini_3w: 700, e_loader: 700, car: 700, tata_ace: 700, mini_truck: 700, truck: 700 };
             const vType = (updatedUser.vehicleType || 'bike').toLowerCase();
             const limit = dueLimits[vType] || 300;
-            
+
             if (updatedUser.walletBalance > -limit) {
                 updatedUser.isBlocked = false;
                 updatedUser.blockReason = null;
