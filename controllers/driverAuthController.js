@@ -541,7 +541,11 @@ export const completeRegistration = async (req, res) => {
         aadharNumber,
         licenseNumber,
         rcNumber,
-        licenseExpiryDate
+        licenseExpiryDate,
+        // Hired driver fields
+        hasHiredDriver,
+        hiredDriverName,
+        hiredDriverPhone,
       } = req.body;
 
       // Validation
@@ -723,6 +727,50 @@ export const completeRegistration = async (req, res) => {
         if (req.files.vehiclePhoto) {
           application.vehiclePhoto = await uploadFile(req.files.vehiclePhoto, 'vehiclePhoto');
         }
+
+        // ── Hired Driver ────────────────────────────────────────────────
+        const wantsHiredDriver = hasHiredDriver === 'true' || hasHiredDriver === true;
+        if (wantsHiredDriver) {
+          // Validate: name + phone required if hired driver is declared
+          if (!hiredDriverName || !hiredDriverPhone) {
+            return res.status(400).json({
+              success: false,
+              message: 'Hired driver name and phone number are required when hasHiredDriver is true'
+            });
+          }
+          if (!/^\d{10}$/.test(hiredDriverPhone)) {
+            return res.status(400).json({
+              success: false,
+              message: 'Hired driver phone must be a valid 10-digit number'
+            });
+          }
+
+          let hiredLicenseDoc = null;
+          if (req.files.hiredDriverLicense) {
+            hiredLicenseDoc = await uploadFile(req.files.hiredDriverLicense, 'hiredDriverLicense');
+          }
+
+          application.hiredDriver = {
+            hasHiredDriver: true,
+            name: hiredDriverName.trim(),
+            phone: hiredDriverPhone.trim(),
+            licenseImage: hiredLicenseDoc
+              ? {
+                  url: hiredLicenseDoc.url,
+                  publicId: hiredLicenseDoc.publicId,
+                  uploadedAt: hiredLicenseDoc.uploadedAt,
+                  verification: { status: 'pending' },
+                }
+              : { url: null, publicId: null, uploadedAt: null, verification: { status: 'pending' } },
+          };
+        } else {
+          application.hiredDriver = {
+            hasHiredDriver: false,
+            name: null,
+            phone: null,
+            licenseImage: { url: null, publicId: null, uploadedAt: null },
+          };
+        }
       } catch (uploadError) {
         return res.status(400).json({
           success: false,
@@ -755,6 +803,12 @@ export const completeRegistration = async (req, res) => {
           phone: application.phone,
           verificationStatus: application.verificationStatus,
           documentStatus,
+          hiredDriver: {
+            hasHiredDriver: application.hiredDriver?.hasHiredDriver || false,
+            name: application.hiredDriver?.name || null,
+            phone: application.hiredDriver?.phone || null,
+            licenseUploaded: !!application.hiredDriver?.licenseImage?.url,
+          },
           submittedAt: application.submittedAt
         }
       });

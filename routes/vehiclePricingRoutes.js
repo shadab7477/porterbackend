@@ -4,7 +4,7 @@ import {
   getAllVehiclePricing,
   createVehiclePricing,
   updateVehiclePricing,
-  deleteVehiclePricing
+  deleteVehiclePricing,
 } from '../controllers/vehiclePricingController.js';
 import { authMiddleware } from '../middleware/auth.js';
 

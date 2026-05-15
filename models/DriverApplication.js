@@ -78,6 +78,18 @@ const bankDetailsSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const subscriptionPaymentSchema = new mongoose.Schema({
+  status: {
+    type: String,
+    enum: ['pending', 'completed', 'failed'],
+    default: 'pending'
+  },
+  razorpayOrderId: { type: String, default: null },
+  razorpayPaymentId: { type: String, default: null },
+  amount: { type: Number, default: 0 },
+  paidAt: { type: Date, default: null }
+}, { _id: false });
+
 const driverApplicationSchema = new mongoose.Schema(
   {
      driverId: {
@@ -167,6 +179,35 @@ const driverApplicationSchema = new mongoose.Schema(
       default: null
     },
 
+    // ── Hired Driver ────────────────────────────────────────────────────
+    // Owner registered the vehicle but hired someone else to drive it.
+    hiredDriver: {
+      hasHiredDriver: {
+        type: Boolean,
+        default: false,
+      },
+      name: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      phone: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      // Hired driver's driving licence image
+      licenseImage: {
+        url: { type: String, default: null },
+        publicId: { type: String, default: null },
+        uploadedAt: { type: Date, default: null },
+        verification: {
+          type: documentVerificationSchema,
+          default: () => ({ status: 'pending' }),
+        },
+      },
+    },
+
     // Overall application status
     verificationStatus: {
       type: String,
@@ -185,6 +226,12 @@ const driverApplicationSchema = new mongoose.Schema(
     reviewedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Admin',
+    },
+
+    // ── Subscription Fee Payment ──────────────────────────────────────────────
+    subscriptionPayment: {
+      type: subscriptionPaymentSchema,
+      default: () => ({ status: 'pending' })
     },
   },
   { timestamps: true }

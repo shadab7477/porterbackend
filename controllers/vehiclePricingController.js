@@ -20,7 +20,7 @@ const uploadFile = async (fileArray, folder, label) => {
   const result = await uploadToCloudinary(file.buffer, folder);
   return {
     url: result.url,
-    publicId: result.publicId
+    publicId: result.publicId,
   };
 };
 
@@ -38,17 +38,20 @@ export const getAllVehiclePricing = async (req, res) => {
 
 export const createVehiclePricing = async (req, res) => {
   try {
-    const { category, type, displayName, ratePerKm, isActive } = req.body;
+    const { category, type, displayName, ratePerKm, subscriptionFee, isActive } = req.body;
 
-    if (!category || !type || !displayName || ratePerKm === undefined) {
-      return res.status(400).json({ success: false, message: 'Missing required fields' });
+    // Required fields check
+    if (!category || !type || !displayName || ratePerKm === undefined || subscriptionFee === undefined) {
+      return res.status(400).json({ success: false, message: 'Missing required fields: category, type, displayName, ratePerKm, subscriptionFee' });
     }
 
+    // Check unique type
     const existingType = await VehiclePricing.findOne({ type: type.toLowerCase() });
     if (existingType) {
       return res.status(400).json({ success: false, message: `Vehicle type '${type}' already exists` });
     }
 
+    // Image validation
     const uploadedFiles = req.files || {};
     if (!uploadedFiles.image || uploadedFiles.image.length === 0) {
       return res.status(400).json({ success: false, message: 'Image is required' });
@@ -66,8 +69,9 @@ export const createVehiclePricing = async (req, res) => {
       type: type.toLowerCase(),
       displayName,
       ratePerKm: Number(ratePerKm),
+      subscriptionFee: Number(subscriptionFee),
       image: imageUpload,
-      isActive: isActive !== undefined ? isActive === 'true' || isActive === true : true
+      isActive: isActive !== undefined ? isActive === 'true' || isActive === true : true,
     });
 
     await vehiclePricing.save();
@@ -82,13 +86,14 @@ export const createVehiclePricing = async (req, res) => {
 export const updateVehiclePricing = async (req, res) => {
   try {
     const { id } = req.params;
-    const { category, type, displayName, ratePerKm, isActive } = req.body;
+    const { category, type, displayName, ratePerKm, subscriptionFee, isActive } = req.body;
 
     const vehicle = await VehiclePricing.findById(id);
     if (!vehicle) {
       return res.status(404).json({ success: false, message: 'Vehicle pricing not found' });
     }
 
+    // If type is being changed, check uniqueness
     if (type && type.toLowerCase() !== vehicle.type) {
       const existingType = await VehiclePricing.findOne({ type: type.toLowerCase() });
       if (existingType) {
@@ -97,11 +102,14 @@ export const updateVehiclePricing = async (req, res) => {
       vehicle.type = type.toLowerCase();
     }
 
+    // Update fields
     if (category) vehicle.category = category;
     if (displayName) vehicle.displayName = displayName;
     if (ratePerKm !== undefined) vehicle.ratePerKm = Number(ratePerKm);
+    if (subscriptionFee !== undefined) vehicle.subscriptionFee = Number(subscriptionFee);
     if (isActive !== undefined) vehicle.isActive = isActive === 'true' || isActive === true;
 
+    // Optional image update
     const uploadedFiles = req.files || {};
     if (uploadedFiles.image && uploadedFiles.image.length > 0) {
       try {
@@ -125,7 +133,7 @@ export const deleteVehiclePricing = async (req, res) => {
   try {
     const { id } = req.params;
     const vehicle = await VehiclePricing.findByIdAndDelete(id);
-    
+
     if (!vehicle) {
       return res.status(404).json({ success: false, message: 'Vehicle pricing not found' });
     }

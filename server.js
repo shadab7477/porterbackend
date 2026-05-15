@@ -49,7 +49,7 @@ const server = http.createServer(app);
 // ================== ✅ CORS CONFIG ==================
 
 const allowedOrigins = [
-  "https://godelivo.com",
+  "http://localhost:5001",
   "https://www.godelivo.com",
   "http://godelivo.com",
   "http://localhost:3000"

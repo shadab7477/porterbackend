@@ -10,6 +10,12 @@ import {
   driverLogout,
   refreshToken
 } from '../controllers/driverAuthController.js';
+import {
+  getSubscriptionFee,
+  createSubscriptionOrder,
+  verifySubscriptionPayment,
+  getSubscriptionStatus
+} from '../controllers/driverSubscriptionController.js';
 import { 
   toggleMyOnlineStatus, 
   getMyOnlineStatus,
@@ -49,7 +55,8 @@ router.post(
     { name: 'panCard', maxCount: 1 },
     { name: 'drivingLicense', maxCount: 1 },
     { name: 'vehicleRC', maxCount: 1 },
-    { name: 'vehiclePhoto', maxCount: 1 }
+    { name: 'vehiclePhoto', maxCount: 1 },
+    { name: 'hiredDriverLicense', maxCount: 1 },  // optional — only if hasHiredDriver=true
   ]),
   completeRegistration
 );
@@ -74,6 +81,18 @@ router.post('/location', driverAuthMiddleware, updateLocation);
 
 // Stats
 router.get('/stats', driverAuthMiddleware, getDriverStats);
+
+
+// ==================== SUBSCRIPTION PAYMENT ROUTES ====================
+// GET  /api/driver/subscription/fee?vehicleType=Bike  (public)
+// POST /api/driver/subscription/create-order          (driver auth)
+// POST /api/driver/subscription/verify                (driver auth)
+// GET  /api/driver/subscription/status/:applicationId (driver auth)
+
+router.get('/subscription/fee', getSubscriptionFee);
+router.post('/subscription/create-order', driverAuthMiddleware, createSubscriptionOrder);
+router.post('/subscription/verify', driverAuthMiddleware, verifySubscriptionPayment);
+router.get('/subscription/status/:applicationId', driverAuthMiddleware, getSubscriptionStatus);
 
 
 // ==================== ADMIN ROUTES ====================

@@ -11,7 +11,7 @@ export const getAllVehicles = async (req, res) => {
     const vehicles = await Vehicle.find(query)
       .skip((page - 1) * limit)
       .limit(parseInt(limit))
-      .sort({ displayName: 1 });
+      .sort({ name: 1 });
     
     const total = await Vehicle.countDocuments(query);
     
@@ -56,7 +56,17 @@ export const getVehicleByType = async (req, res) => {
 
 export const createVehicle = async (req, res) => {
   try {
-    const { vehicleType, category, name, baseFare, pricePerKm, capacity, weight, description } = req.body;
+    const {
+      vehicleType,
+      category,
+      name,
+      baseFare,
+      pricePerKm,
+      subscriptionFee,   // NEW
+      capacity,
+      weight,
+      description
+    } = req.body;
     
     const existingVehicle = await Vehicle.findOne({ vehicleType });
     if (existingVehicle) {
@@ -69,6 +79,7 @@ export const createVehicle = async (req, res) => {
       name,
       baseFare,
       pricePerKm,
+      subscriptionFee: subscriptionFee !== undefined ? Number(subscriptionFee) : 0, // NEW
       capacity,
       weight,
       description
@@ -89,6 +100,11 @@ export const updateVehicle = async (req, res) => {
   try {
     const { id } = req.params;
     const updateData = req.body;
+    
+    // Convert subscriptionFee to number if present (NEW)
+    if (updateData.subscriptionFee !== undefined) {
+      updateData.subscriptionFee = Number(updateData.subscriptionFee);
+    }
     
     const vehicle = await Vehicle.findByIdAndUpdate(
       id,
@@ -140,8 +156,6 @@ export const calculateFare = async (req, res) => {
     }
     
     const distanceInKm = parseFloat(distance);
-    
-    // Fare calculation based on distance only (no base fare)
     const total = distanceInKm * vehicle.pricePerKm;
     
     res.json({
@@ -149,6 +163,7 @@ export const calculateFare = async (req, res) => {
       data: {
         vehicleType: vehicle.vehicleType,
         name: vehicle.name,
+        subscriptionFee: vehicle.subscriptionFee,   // NEW (optional)
         breakdown: {
           distance: distanceInKm,
           pricePerKm: vehicle.pricePerKm,
@@ -164,7 +179,7 @@ export const calculateFare = async (req, res) => {
 
 export const getActiveVehicles = async (req, res) => {
   try {
-    const vehicles = await Vehicle.find({ isActive: true }).sort({ displayName: 1 });
+    const vehicles = await Vehicle.find({ isActive: true }).sort({ name: 1 });
     res.json({ success: true, data: vehicles });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -286,4 +301,3 @@ export const deleteVehicleImage = async (req, res) => {
     });
   }
 };
-
