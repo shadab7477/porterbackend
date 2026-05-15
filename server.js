@@ -49,7 +49,7 @@ const server = http.createServer(app);
 // ================== ✅ CORS CONFIG ==================
 
 const allowedOrigins = [
-  "http://localhost:5001",
+  "https://godelivo.com",
   "https://www.godelivo.com",
   "http://godelivo.com",
   "http://localhost:3000"
@@ -171,8 +171,8 @@ app.use('/api/vehicles', vehicleRoutes);
 // ================== ❤️ HEALTH CHECK ==================
 
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'healthy', 
+  res.json({
+    status: 'healthy',
     time: new Date().toISOString(),
     connections: io.engine?.clientsCount || 0,
     drivers: global.activeDrivers.size,
@@ -185,7 +185,7 @@ app.get('/health', (req, res) => {
 // ================== 🔌 SOCKET TEST ==================
 
 app.get('/socket-test', (req, res) => {
-  res.json({ 
+  res.json({
     status: 'Socket.IO ready',
     connections: io.engine?.clientsCount || 0
   });

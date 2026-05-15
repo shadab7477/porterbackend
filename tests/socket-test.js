@@ -13,7 +13,7 @@
 
 const { io } = require('socket.io-client');
 
-const API_URL = process.env.API_URL || 'http://localhost:5001';
+const API_URL = process.env.API_URL || 'https://godelivo.com';
 const colors = {
   reset: '\x1b[0m',
   bright: '\x1b[1m',
