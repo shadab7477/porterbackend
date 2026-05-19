@@ -1,12 +1,28 @@
+import mongoose from 'mongoose';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import DriverApplication from '../models/DriverApplication.js';
+import Driver from '../models/Driver.js';
 import Vehicle from '../models/Vehicle.js';
 
 const razorpay = new Razorpay({
   key_id:     process.env.RAZORPAY_KEY_ID     || 'rzp_live_ST0TZQUt1IwsqU',
   key_secret: process.env.RAZORPAY_KEY_SECRET || 'OZdye2d48zaLY1gSko96eJsX',
 });
+
+const resolveDriverApplication = async (id) => {
+  if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+    return null;
+  }
+
+  const application = await DriverApplication.findById(id);
+  if (application) {
+    return application;
+  }
+
+  const driver = await Driver.findById(id).populate('applicationId');
+  return driver?.applicationId || null;
+};
 
 // ─── GET SUBSCRIPTION FEE ────────────────────────────────────────────────────
 // GET /api/driver/subscription/fee?vehicleType=bike
@@ -57,8 +73,8 @@ export const createSubscriptionOrder = async (req, res) => {
       return res.status(400).json({ success: false, message: 'applicationId is required' });
     }
 
-    // Find application — must belong to the calling driver's phone
-    const application = await DriverApplication.findById(applicationId);
+    // Find application — allow either application _id or driver _id
+    const application = await resolveDriverApplication(applicationId);
     if (!application) {
       return res.status(404).json({ success: false, message: 'Driver application not found' });
     }
@@ -168,6 +184,7 @@ export const verifySubscriptionPayment = async (req, res) => {
   try {
     const { applicationId, razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
     const phone = req.driver?.phone;
+console.log(req.body);
 
     if (!applicationId || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
       return res.status(400).json({
@@ -176,7 +193,7 @@ export const verifySubscriptionPayment = async (req, res) => {
       });
     }
 
-    const application = await DriverApplication.findById(applicationId);
+    const application = await resolveDriverApplication(applicationId);
     if (!application) {
       return res.status(404).json({ success: false, message: 'Driver application not found' });
     }
@@ -236,8 +253,8 @@ export const getSubscriptionStatus = async (req, res) => {
     const { applicationId } = req.params;
     const phone = req.driver?.phone;
 
-    const application = await DriverApplication.findById(applicationId)
-      .select('phone subscriptionPayment verificationStatus driverId fullName vehicleType');
+    const application = await resolveDriverApplication(applicationId)
+      .then(app => app ? app.toObject() : null);
 
     if (!application) {
       return res.status(404).json({ success: false, message: 'Application not found' });
