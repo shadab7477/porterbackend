@@ -61,6 +61,7 @@ const checkDriverVerification = async (driverId) => {
   if (!driver) {
     throw new Error('Driver not found');
   }
+  console.log(driver);
   
   const application = driver.applicationId;
   if (!application || application.verificationStatus !== 'verified') {
@@ -511,6 +512,7 @@ export const completeRegistration = async (req, res) => {
     }
 
     const token = authHeader.split(' ')[1];
+    let responseToken = token;
     
     try {
       const decoded = verifyDriverToken(token);
@@ -778,9 +780,44 @@ export const completeRegistration = async (req, res) => {
         });
       }
 
-      application.verificationStatus = 'submitted';
-      application.submittedAt = new Date();
+      const applicationStatus = application.calculateOverallStatus?.();
+      if (applicationStatus === 'verified') {
+        application.verificationStatus = 'verified';
+        application.reviewedAt = new Date();
+      } else if (['under_review', 'partially_verified'].includes(applicationStatus)) {
+        application.verificationStatus = applicationStatus;
+      } else {
+        application.verificationStatus = 'submitted';
+      }
+
+      if (!application.submittedAt) {
+        application.submittedAt = new Date();
+      }
+
       await application.save();
+
+      if (application.verificationStatus === 'verified') {
+        let verifiedDriver = await Driver.findOne({ phone }).populate('applicationId');
+        if (!verifiedDriver) {
+          verifiedDriver = new Driver({
+            driverId: application.driverId,
+            name: application.fullName,
+            phone: application.phone,
+            email: application.email,
+            applicationId: application._id,
+            vehicleType: application.vehicleType,
+            vehicleNumber: application.vehicleNumber,
+            isOnline: false,
+            lastActive: new Date()
+          });
+          await verifiedDriver.save();
+        } else {
+          verifiedDriver.lastActive = new Date();
+          await verifiedDriver.save();
+        }
+
+        responseToken = generateDriverToken(verifiedDriver._id, phone, true);
+      }
 
       const documentStatus = {
         profilePhoto: application.profilePhoto?.verification?.status || 'pending',
@@ -795,8 +832,11 @@ export const completeRegistration = async (req, res) => {
 
       res.status(200).json({
         success: true,
-        message: 'Registration completed successfully! Your application is under review.',
+        message: application.verificationStatus === 'verified'
+          ? 'Registration completed successfully. Your account is verified.'
+          : 'Registration completed successfully! Your application is under review.',
         data: {
+          token: responseToken,
           applicationId: application._id,
           driverId: application.driverId,
           fullName: application.fullName,
