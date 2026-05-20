@@ -84,7 +84,8 @@ const driverAuthMiddleware = async (req, res, next) => {
       id: decoded.id || null,
       phone: decoded.phone,
       name: driver?.name || null,
-      isVerified: driver?.applicationId?.verificationStatus === 'verified' || false
+      isVerified: driver?.applicationId?.verificationStatus === 'verified' || false,
+      applicationId: driver?.applicationId?._id || driver?.applicationId || null
     };
     
     // Also attach decoded token for registration routes that need phone number

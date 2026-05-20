@@ -329,6 +329,11 @@ export const verifyOTP = async (req, res) => {
       responseData.driverId = driverId;
     }
 
+    // Add applicationId only if it exists
+    if (existingApplication) {
+      responseData.applicationId = existingApplication._id;
+    }
+
     // Add document status if available and application exists
     if (existingApplication && applicationStatus !== 'verified') {
       const documentStatus = {
@@ -413,6 +418,7 @@ export const driverLogin = async (req, res) => {
         driver: {
           id: driver._id,
           driverId: driver.driverId,
+          applicationId: driver.applicationId?._id || driver.applicationId,
           name: driver.name,
           phone: driver.phone,
           email: driver.email,
@@ -452,7 +458,10 @@ export const driverLogout = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: 'Logged out successfully'
+      message: 'Logged out successfully',
+      data: {
+        applicationId: req.driver.applicationId || null
+      }
     });
   } catch (error) {
     console.error('Error in driverLogout:', error);
@@ -485,7 +494,8 @@ export const refreshToken = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
-        token: newToken
+        token: newToken,
+        applicationId: application?._id || null
       }
     });
   } catch (error) {
@@ -912,6 +922,7 @@ export const getApplicationStatus = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
+        applicationId: application._id,
         driverId: application.driverId,
         fullName: application.fullName,
         verificationStatus: application.verificationStatus,
@@ -938,6 +949,7 @@ export const getDriverProfile = async (req, res) => {
     const profileData = {
       id: driver._id,
       driverId: driver.driverId,
+      applicationId: application?._id || driver.applicationId,
       name: driver.name,
       phone: driver.phone,
       email: driver.email,

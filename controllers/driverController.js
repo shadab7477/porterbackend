@@ -83,6 +83,7 @@ export const toggleMyOnlineStatus = async (req, res) => {
       success: true,
       message: `You are now ${driver.isOnline ? 'online' : 'offline'}`,
       data: {
+        applicationId: driver.applicationId,
         isOnline: driver.isOnline,
         isAvailable: driver.isAvailable,
         currentLocation: driver.currentLocation,
@@ -105,7 +106,7 @@ export const getMyOnlineStatus = async (req, res) => {
     const driverId = req.driver.id;
     
     const driver = await Driver.findById(driverId)
-      .select('isOnline isAvailable lastActive lastOnlineAt');
+      .select('isOnline isAvailable lastActive lastOnlineAt applicationId');
     
     if (!driver) {
       return res.status(404).json({ 
@@ -117,6 +118,7 @@ export const getMyOnlineStatus = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
+        applicationId: driver.applicationId,
         isOnline: driver.isOnline,
         isAvailable: driver.isAvailable,
         lastActive: driver.lastActive,
@@ -155,7 +157,7 @@ export const updateLocation = async (req, res) => {
         lastActive: new Date()
       },
       { new: true }
-    ).select('currentLocation lastActive');
+    ).select('currentLocation lastActive applicationId');
     
     if (!driver) {
       return res.status(404).json({ 
@@ -178,6 +180,7 @@ export const updateLocation = async (req, res) => {
       success: true,
       message: 'Location updated successfully',
       data: {
+        applicationId: driver.applicationId,
         location: driver.currentLocation,
         lastActive: driver.lastActive
       }
@@ -197,7 +200,7 @@ export const getDriverStats = async (req, res) => {
     const driverId = req.driver.id;
     
     const driver = await Driver.findById(driverId)
-      .select('totalEarnings totalTrips rating isOnline isAvailable');
+      .select('totalEarnings totalTrips rating isOnline isAvailable applicationId');
     
     if (!driver) {
       return res.status(404).json({ 
@@ -209,6 +212,7 @@ export const getDriverStats = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
+        applicationId: driver.applicationId,
         totalEarnings: driver.totalEarnings,
         totalTrips: driver.totalTrips,
         rating: driver.rating,

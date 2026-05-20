@@ -92,7 +92,7 @@ router.get('/stats', driverAuthMiddleware, getDriverStats);
 router.get('/subscription/fee', getSubscriptionFee);
 router.post('/subscription/create-order', driverAuthMiddleware, createSubscriptionOrder);
 router.post('/subscription/verify', driverAuthMiddleware, verifySubscriptionPayment);
-router.get('/subscription/status/:applicationId', driverAuthMiddleware, getSubscriptionStatus);
+router.get('/subscription/status/:applicationId?', driverAuthMiddleware, getSubscriptionStatus);
 
 
 // ==================== ADMIN ROUTES ====================
