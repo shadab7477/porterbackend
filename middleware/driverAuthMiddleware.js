@@ -40,20 +40,33 @@ const driverAuthMiddleware = async (req, res, next) => {
       });
     }
 
-    // Get driver from database if exists (for registration routes, driver might not exist yet)
+    // Get driver/application from database if exists. During subscription
+    // payment, the token id may refer to either the Driver or DriverApplication.
     let driver = null;
+    let application = null;
     try {
       if (decoded.id) {
         driver = await Driver.findById(decoded.id).populate('applicationId');
+        application = driver?.applicationId || null;
+
+        if (!application) {
+          application = await DriverApplication.findById(decoded.id);
+        }
+      }
+
+      if (!application && decoded.phone) {
+        application = await DriverApplication.findOne({ phone: decoded.phone });
       }
     } catch (err) {
-      console.log('Driver not found or not yet created:', err.message);
+      console.log('Driver/application not found or not yet created:', err.message);
     }
     
-    // For registration routes, we don't require driver to exist in DB
+    // For registration and subscription routes, we don't require a Driver
+    // document yet because payment can happen from the application flow.
     const isRegistrationRoute = req.path === '/register' || req.path === '/status/:phone';
+    const isSubscriptionRoute = req.path.startsWith('/subscription/');
     
-    if (!isRegistrationRoute && !driver) {
+    if (!isRegistrationRoute && !isSubscriptionRoute && !driver) {
       return res.status(401).json({
         success: false,
         message: 'Driver not found. Please complete registration first.'
@@ -69,8 +82,7 @@ const driverAuthMiddleware = async (req, res, next) => {
     }
 
     // For protected routes (non-registration), check if driver is verified
-    if (!isRegistrationRoute && driver && driver.applicationId) {
-      const application = driver.applicationId;
+    if (!isRegistrationRoute && !isSubscriptionRoute && driver && application) {
       if (application.verificationStatus !== 'verified') {
         return res.status(403).json({
           success: false,
@@ -83,9 +95,9 @@ const driverAuthMiddleware = async (req, res, next) => {
     req.driver = {
       id: decoded.id || null,
       phone: decoded.phone,
-      name: driver?.name || null,
-      isVerified: driver?.applicationId?.verificationStatus === 'verified' || false,
-      applicationId: driver?.applicationId?._id || driver?.applicationId || null
+      name: driver?.name || application?.fullName || null,
+      isVerified: application?.verificationStatus === 'verified' || false,
+      applicationId: application?._id || application || null
     };
     
     // Also attach decoded token for registration routes that need phone number

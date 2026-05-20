@@ -91,11 +91,11 @@ export const getSubscriptionFee = async (req, res) => {
 // Auth: driverAuthMiddleware (token from OTP → register flow)
 export const createSubscriptionOrder = async (req, res) => {
   try {
-    const { applicationId } = req.body;
+    const applicationId = req.body?.applicationId || req.driver?.applicationId || req.driver?.id;
     const phone = req.driver?.phone;
 
     if (!applicationId && !phone) {
-      return res.status(400).json({ success: false, message: 'applicationId or valid driver token is required' });
+      return res.status(400).json({ success: false, message: 'applicationId or valid driver token id is required' });
     }
 
     // Find application from applicationId or authenticated driver token
@@ -212,6 +212,7 @@ export const verifySubscriptionPayment = async (req, res) => {
   try {
     const { applicationId, razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
     const phone = req.driver?.phone;
+    const resolvedApplicationId = applicationId || req.driver?.applicationId || req.driver?.id;
 
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
       return res.status(400).json({
@@ -220,7 +221,7 @@ export const verifySubscriptionPayment = async (req, res) => {
       });
     }
 
-    const application = await resolveDriverApplication(applicationId, phone);
+    const application = await resolveDriverApplication(resolvedApplicationId, phone);
     if (!application) {
       return res.status(404).json({ success: false, message: 'Driver application not found' });
     }
@@ -273,14 +274,16 @@ export const verifySubscriptionPayment = async (req, res) => {
   }
 };
 
+
 // ─── GET SUBSCRIPTION STATUS ─────────────────────────────────────────────────
 // GET /api/driver/subscription/status/:applicationId?
 export const getSubscriptionStatus = async (req, res) => {
   try {
     const { applicationId } = req.params;
     const phone = req.driver?.phone;
+    const resolvedApplicationId = applicationId || req.driver?.applicationId || req.driver?.id;
 
-    const application = await resolveDriverApplication(applicationId, phone)
+    const application = await resolveDriverApplication(resolvedApplicationId, phone)
       .then(app => app ? app.toObject() : null);
 
     if (!application) {
