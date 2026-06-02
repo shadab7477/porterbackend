@@ -37,6 +37,15 @@ const aadharDocSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const bankDetailsSchema = new mongoose.Schema({
+  accountHolderName: { type: String, trim: true },
+  accountNumber: { type: String, trim: true },
+  ifscCode: { type: String, trim: true, uppercase: true },
+  bankName: { type: String, trim: true },
+  branchName: { type: String, trim: true },
+  updatedAt: { type: Date, default: Date.now }
+}, { _id: false });
+
 const merchantApplicationSchema = new mongoose.Schema(
   {
     customerId: {
@@ -52,6 +61,12 @@ const merchantApplicationSchema = new mongoose.Schema(
     businessName:   { type: String, trim: true },
     businessRegistrationNumber: { type: String, trim: true },
     panNumber:      { type: String, trim: true, uppercase: true },
+
+    // Merchant payout account
+    bankDetails: {
+      type: bankDetailsSchema,
+      default: null
+    },
 
     // Documents (all uploaded to Cloudinary)
     aadharCard:   { type: aadharDocSchema,  default: null },

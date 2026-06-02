@@ -29,6 +29,41 @@ const uploadFile = async (fileArray, folder, label) => {
   };
 };
 
+const hasCompleteBankDetails = (bankDetails) => (
+  !!bankDetails?.accountHolderName &&
+  !!bankDetails?.accountNumber &&
+  !!bankDetails?.ifscCode
+);
+
+const maskAccountNumber = (accountNumber) => {
+  if (!accountNumber) return null;
+  const value = String(accountNumber);
+  return `****${value.slice(-4)}`;
+};
+
+const serializeBankDetails = (bankDetails) => {
+  if (!bankDetails) return null;
+  return {
+    accountHolderName: bankDetails.accountHolderName,
+    accountNumber: maskAccountNumber(bankDetails.accountNumber),
+    ifscCode: bankDetails.ifscCode,
+    bankName: bankDetails.bankName,
+    branchName: bankDetails.branchName,
+    updatedAt: bankDetails.updatedAt
+  };
+};
+
+const findCustomerMerchantApplication = async (customer) => {
+  if (customer.merchantApplicationId) {
+    const linked = await MerchantApplication.findById(customer.merchantApplicationId);
+    if (linked) return linked;
+  }
+
+  return MerchantApplication
+    .findOne({ customerId: customer._id })
+    .sort({ createdAt: -1 });
+};
+
 // ─── CUSTOMER ROUTES ──────────────────────────────────────────────────────────
 
 // POST /api/merchant/apply
@@ -171,6 +206,90 @@ export const getMerchantStatus = async (req, res) => {
   } catch (error) {
     console.error('getMerchantStatus error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch merchant status' });
+  }
+};
+
+// GET /api/merchant/bank-details
+export const getMerchantBankDetails = async (req, res) => {
+  try {
+    const customer = await Customer.findById(req.customerId).select('isMerchant merchantApplicationId bankDetails');
+    if (!customer) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+
+    const application = await findCustomerMerchantApplication(customer);
+    if (!application) {
+      return res.status(404).json({
+        success: false,
+        message: 'Merchant application not found. Please apply for a merchant account first.'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        applicationId: application._id,
+        applicationStatus: application.status,
+        bankDetails: serializeBankDetails(application.bankDetails || customer.bankDetails)
+      }
+    });
+  } catch (error) {
+    console.error('getMerchantBankDetails error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch merchant bank details' });
+  }
+};
+
+// PUT /api/merchant/bank-details
+export const updateMerchantBankDetails = async (req, res) => {
+  try {
+    const customer = await Customer.findById(req.customerId).select('isMerchant merchantApplicationId bankDetails');
+    if (!customer) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+
+    const application = await findCustomerMerchantApplication(customer);
+    if (!application) {
+      return res.status(404).json({
+        success: false,
+        message: 'Merchant application not found. Please apply for a merchant account first.'
+      });
+    }
+
+    const { accountHolderName, accountNumber, ifscCode, bankName, branchName } = req.body;
+    const bankDetails = {
+      accountHolderName: accountHolderName ? String(accountHolderName).trim() : '',
+      accountNumber: accountNumber ? String(accountNumber).trim() : '',
+      ifscCode: ifscCode ? String(ifscCode).trim().toUpperCase() : '',
+      bankName: bankName ? String(bankName).trim() : undefined,
+      branchName: branchName ? String(branchName).trim() : undefined,
+      updatedAt: new Date()
+    };
+
+    if (!hasCompleteBankDetails(bankDetails)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Account holder name, account number and IFSC code are required'
+      });
+    }
+
+    application.bankDetails = bankDetails;
+    await application.save();
+
+    customer.bankDetails = bankDetails;
+    await customer.save();
+
+    res.json({
+      success: true,
+      message: 'Merchant bank details saved successfully',
+      data: {
+        applicationId: application._id,
+        applicationStatus: application.status,
+        bankDetails: serializeBankDetails(application.bankDetails)
+      }
+    });
+  } catch (error) {
+    console.error('updateMerchantBankDetails error:', error);
+    res.status(500).json({ success: false, message: 'Failed to save merchant bank details' });
   }
 };
 

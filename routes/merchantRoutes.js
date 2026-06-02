@@ -3,6 +3,8 @@ import express from 'express';
 import {
   applyForMerchant,
   getMerchantStatus,
+  getMerchantBankDetails,
+  updateMerchantBankDetails,
   getAllMerchantApplications,
   getMerchantApplicationById,
   verifyMerchantDocument,
@@ -33,6 +35,8 @@ router.post(
 
 // Get current merchant status for logged-in customer
 router.get('/status', customerAuthMiddleware, getMerchantStatus);
+router.get('/bank-details', customerAuthMiddleware, getMerchantBankDetails);
+router.put('/bank-details', customerAuthMiddleware, updateMerchantBankDetails);
 
 // ─── ADMIN routes (/api/admin/merchant) ──────────────────────────────────────
 
