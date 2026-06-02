@@ -1,6 +1,15 @@
 import mongoose from 'mongoose';
 import jwt from 'jsonwebtoken';
 
+const bankDetailsSchema = new mongoose.Schema({
+  accountHolderName: { type: String, trim: true },
+  accountNumber: { type: String, trim: true },
+  ifscCode: { type: String, trim: true, uppercase: true },
+  bankName: { type: String, trim: true },
+  branchName: { type: String, trim: true },
+  updatedAt: { type: Date, default: Date.now }
+}, { _id: false });
+
 const customerSchema = new mongoose.Schema({
   name: {
     type: String,
@@ -24,6 +33,10 @@ const customerSchema = new mongoose.Schema({
   walletBalance: {
     type: Number,
     default: 0
+  },
+  bankDetails: {
+    type: bankDetailsSchema,
+    default: null
   },
   isBlocked: {
     type: Boolean,

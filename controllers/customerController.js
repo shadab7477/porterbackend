@@ -130,7 +130,7 @@ export const createCustomer = async (req, res) => {
 
 export const updateCustomer = async (req, res) => {
   try {
-    const { name, email, address, fcmToken } = req.body;
+    const { name, email, address, fcmToken, bankDetails } = req.body;
 
     // Build update object dynamically
     const updateData = {
@@ -140,6 +140,24 @@ export const updateCustomer = async (req, res) => {
     if (name) updateData.name = name;
     if (email) updateData.email = email;
     if (address) updateData.address = address;
+    if (bankDetails) {
+      const { accountHolderName, accountNumber, ifscCode, bankName, branchName } = bankDetails;
+      if (!accountHolderName || !accountNumber || !ifscCode) {
+        return res.status(400).json({
+          success: false,
+          message: 'Account holder name, account number and IFSC code are required'
+        });
+      }
+
+      updateData.bankDetails = {
+        accountHolderName: String(accountHolderName).trim(),
+        accountNumber: String(accountNumber).trim(),
+        ifscCode: String(ifscCode).trim().toUpperCase(),
+        bankName: bankName ? String(bankName).trim() : undefined,
+        branchName: branchName ? String(branchName).trim() : undefined,
+        updatedAt: new Date()
+      };
+    }
 
     // ✅ Save FCM token if provided
     if (fcmToken) {

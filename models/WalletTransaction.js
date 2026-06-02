@@ -49,8 +49,31 @@ const walletTransactionSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['pending', 'completed', 'failed'],
+        enum: ['pending', 'processing', 'completed', 'failed'],
         default: 'pending'
+    },
+    payoutDetails: {
+        razorpayContactId: String,
+        razorpayFundAccountId: String,
+        razorpayPayoutId: String,
+        bankAccountLast4: String,
+        ifscCode: String,
+        accountHolderName: String,
+        mode: String,
+        purpose: String,
+        approvedAt: Date,
+        approvedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Admin'
+        },
+        rejectedAt: Date,
+        rejectedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Admin'
+        },
+        rejectionReason: String,
+        failureReason: String,
+        rawStatus: String
     },
     createdAt: {
         type: Date,

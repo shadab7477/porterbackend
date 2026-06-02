@@ -229,11 +229,31 @@ export const getCustomerProfile = async (req, res) => {
 
 export const updateCustomerProfile = async (req, res) => {
   try {
-    const { name, email } = req.body;
+    const { name, email, bankDetails } = req.body;
+
+    const updateData = { name, email };
+    if (bankDetails) {
+      const { accountHolderName, accountNumber, ifscCode, bankName, branchName } = bankDetails;
+      if (!accountHolderName || !accountNumber || !ifscCode) {
+        return res.status(400).json({
+          success: false,
+          message: 'Account holder name, account number and IFSC code are required'
+        });
+      }
+
+      updateData.bankDetails = {
+        accountHolderName: String(accountHolderName).trim(),
+        accountNumber: String(accountNumber).trim(),
+        ifscCode: String(ifscCode).trim().toUpperCase(),
+        bankName: bankName ? String(bankName).trim() : undefined,
+        branchName: branchName ? String(branchName).trim() : undefined,
+        updatedAt: new Date()
+      };
+    }
 
     const customer = await Customer.findByIdAndUpdate(
       req.customerId,
-      { name, email },
+      updateData,
       { new: true, runValidators: true }
     ).select('-isBlocked');
 

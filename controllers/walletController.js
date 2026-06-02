@@ -1,8 +1,10 @@
 import Razorpay from 'razorpay';
+import axios from 'axios';
 import crypto from 'crypto';
 import WalletTransaction from '../models/WalletTransaction.js';
 import Customer from '../models/Customer.js';
 import Driver from '../models/Driver.js';
+import DriverApplication from '../models/DriverApplication.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -10,6 +12,95 @@ const razorpay = new Razorpay({
     key_id: process.env.RAZORPAY_KEY_ID || 'rzp_live_ST0TZQUt1IwsqU',
     key_secret: process.env.RAZORPAY_KEY_SECRET || 'OZdye2d48zaLY1gSko96eJsX'
 });
+
+const hasCompleteBankDetails = (bankDetails) => (
+    !!bankDetails?.accountHolderName &&
+    !!bankDetails?.accountNumber &&
+    !!bankDetails?.ifscCode
+);
+
+const maskAccountNumber = (accountNumber) => {
+    if (!accountNumber) return null;
+    const value = String(accountNumber);
+    return `****${value.slice(-4)}`;
+};
+
+const getDriverBankDetails = async (driver) => {
+    const application = await DriverApplication.findById(driver.applicationId).select('bankDetails');
+    return application?.bankDetails || null;
+};
+
+const getWithdrawalUserAndBank = async (transaction) => {
+    if (transaction.userType === 'Customer') {
+        const customer = await Customer.findById(transaction.userId);
+        return { user: customer, bankDetails: customer?.bankDetails || null };
+    }
+
+    const driver = await Driver.findById(transaction.userId);
+    const bankDetails = driver ? await getDriverBankDetails(driver) : null;
+    return { user: driver, bankDetails };
+};
+
+const createRazorpayXPayout = async ({ transaction, user, bankDetails, mode = 'IMPS', purpose = 'payout' }) => {
+    const keyId = process.env.RAZORPAY_KEY_ID || 'rzp_live_ST0TZQUt1IwsqU';
+    const keySecret = process.env.RAZORPAY_KEY_SECRET || 'OZdye2d48zaLY1gSko96eJsX';
+    const accountNumber = process.env.RAZORPAYX_ACCOUNT_NUMBER || process.env.RAZORPAY_ACCOUNT_NUMBER;
+
+    if (!accountNumber) {
+        throw new Error('RAZORPAYX_ACCOUNT_NUMBER is not configured');
+    }
+
+    const auth = { username: keyId, password: keySecret };
+    const contactPayload = {
+        name: user.name || bankDetails.accountHolderName,
+        email: user.email || undefined,
+        contact: user.phone || undefined,
+        type: transaction.userType === 'Driver' ? 'vendor' : 'customer',
+        reference_id: `${transaction.userType}_${user._id}`,
+        notes: {
+            userId: String(user._id),
+            userType: transaction.userType
+        }
+    };
+
+    const contactRes = await axios.post('https://api.razorpay.com/v1/contacts', contactPayload, { auth });
+    const fundAccountRes = await axios.post('https://api.razorpay.com/v1/fund_accounts', {
+        contact_id: contactRes.data.id,
+        account_type: 'bank_account',
+        bank_account: {
+            name: bankDetails.accountHolderName,
+            ifsc: String(bankDetails.ifscCode).toUpperCase(),
+            account_number: String(bankDetails.accountNumber)
+        }
+    }, { auth });
+
+    const payoutRes = await axios.post('https://api.razorpay.com/v1/payouts', {
+        account_number: accountNumber,
+        fund_account_id: fundAccountRes.data.id,
+        amount: Math.round(Math.abs(transaction.amount) * 100),
+        currency: 'INR',
+        mode,
+        purpose,
+        reference_id: String(transaction._id),
+        narration: 'GoDelivo withdrawal',
+        notes: {
+            userId: String(user._id),
+            userType: transaction.userType,
+            transactionId: String(transaction._id)
+        }
+    }, {
+        auth,
+        headers: {
+            'X-Payout-Idempotency': String(transaction._id)
+        }
+    });
+
+    return {
+        contact: contactRes.data,
+        fundAccount: fundAccountRes.data,
+        payout: payoutRes.data
+    };
+};
 
 // 1. Get Wallet Balance and History
 export const getWalletBalance = async (req, res) => {
@@ -228,6 +319,15 @@ export const requestWithdrawal = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Driver not found' });
         }
 
+        const bankDetails = await getDriverBankDetails(driver);
+        if (!hasCompleteBankDetails(bankDetails)) {
+            return res.status(400).json({ success: false, message: 'Complete verified bank details are required before withdrawal' });
+        }
+
+        if (bankDetails.verification?.status && bankDetails.verification.status !== 'verified') {
+            return res.status(400).json({ success: false, message: 'Bank details must be verified before withdrawal' });
+        }
+
         // Check if driver has sufficient positive balance
         if (driver.walletBalance < amount) {
             return res.status(400).json({ success: false, message: `Insufficient balance. Your withdrawable balance is ₹${Math.max(0, driver.walletBalance)}` });
@@ -288,6 +388,10 @@ export const requestCustomerWithdrawal = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Customer not found' });
         }
 
+        if (!hasCompleteBankDetails(customer.bankDetails)) {
+            return res.status(400).json({ success: false, message: 'Complete bank details are required before withdrawal' });
+        }
+
         // Check if customer has sufficient positive balance
         if (customer.walletBalance < amount) {
             return res.status(400).json({ success: false, message: `Insufficient balance. Your withdrawable balance is ₹${Math.max(0, customer.walletBalance)}` });
@@ -326,5 +430,257 @@ export const requestCustomerWithdrawal = async (req, res) => {
     } catch (error) {
         console.error('Request customer withdrawal error:', error);
         res.status(500).json({ success: false, message: 'Failed to process withdrawal' });
+    }
+};
+
+export const getCustomerBankDetails = async (req, res) => {
+    try {
+        const customer = await Customer.findById(req.customerId).select('bankDetails');
+        if (!customer) {
+            return res.status(404).json({ success: false, message: 'Customer not found' });
+        }
+
+        const bankDetails = customer.bankDetails ? {
+            accountHolderName: customer.bankDetails.accountHolderName,
+            accountNumber: maskAccountNumber(customer.bankDetails.accountNumber),
+            ifscCode: customer.bankDetails.ifscCode,
+            bankName: customer.bankDetails.bankName,
+            branchName: customer.bankDetails.branchName,
+            updatedAt: customer.bankDetails.updatedAt
+        } : null;
+
+        res.json({ success: true, data: bankDetails });
+    } catch (error) {
+        console.error('Get customer bank details error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch bank details' });
+    }
+};
+
+export const updateCustomerBankDetails = async (req, res) => {
+    try {
+        const { accountHolderName, accountNumber, ifscCode, bankName, branchName } = req.body;
+
+        if (!accountHolderName || !accountNumber || !ifscCode) {
+            return res.status(400).json({ success: false, message: 'Account holder name, account number and IFSC code are required' });
+        }
+
+        const customer = await Customer.findById(req.customerId);
+        if (!customer) {
+            return res.status(404).json({ success: false, message: 'Customer not found' });
+        }
+
+        customer.bankDetails = {
+            accountHolderName: String(accountHolderName).trim(),
+            accountNumber: String(accountNumber).trim(),
+            ifscCode: String(ifscCode).trim().toUpperCase(),
+            bankName: bankName ? String(bankName).trim() : undefined,
+            branchName: branchName ? String(branchName).trim() : undefined,
+            updatedAt: new Date()
+        };
+        await customer.save();
+
+        res.json({
+            success: true,
+            message: 'Bank details updated successfully',
+            data: {
+                accountHolderName: customer.bankDetails.accountHolderName,
+                accountNumber: maskAccountNumber(customer.bankDetails.accountNumber),
+                ifscCode: customer.bankDetails.ifscCode,
+                bankName: customer.bankDetails.bankName,
+                branchName: customer.bankDetails.branchName,
+                updatedAt: customer.bankDetails.updatedAt
+            }
+        });
+    } catch (error) {
+        console.error('Update customer bank details error:', error);
+        res.status(500).json({ success: false, message: 'Failed to update bank details' });
+    }
+};
+
+export const getAdminWithdrawals = async (req, res) => {
+    try {
+        const { status = 'pending', page = 1, limit = 20 } = req.query;
+        const query = { transactionCategory: 'withdrawal' };
+        if (status && status !== 'all') query.status = status;
+
+        const pageNum = parseInt(page, 10) || 1;
+        const limitNum = parseInt(limit, 10) || 20;
+
+        const [transactions, total] = await Promise.all([
+            WalletTransaction.find(query).sort({ createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum).lean(),
+            WalletTransaction.countDocuments(query)
+        ]);
+
+        const data = await Promise.all(transactions.map(async (transaction) => {
+            const { user, bankDetails } = await getWithdrawalUserAndBank(transaction);
+            return {
+                ...transaction,
+                requestedAmount: Math.abs(transaction.amount),
+                user: user ? {
+                    id: user._id,
+                    name: user.name,
+                    phone: user.phone,
+                    email: user.email,
+                    walletBalance: user.walletBalance
+                } : null,
+                bankDetails: bankDetails ? {
+                    accountHolderName: bankDetails.accountHolderName,
+                    accountNumber: maskAccountNumber(bankDetails.accountNumber),
+                    ifscCode: bankDetails.ifscCode,
+                    bankName: bankDetails.bankName,
+                    branchName: bankDetails.branchName,
+                    verificationStatus: bankDetails.verification?.status
+                } : null
+            };
+        }));
+
+        res.json({
+            success: true,
+            data,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total,
+                pages: Math.ceil(total / limitNum)
+            }
+        });
+    } catch (error) {
+        console.error('Get admin withdrawals error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch withdrawals' });
+    }
+};
+
+export const approveWithdrawal = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { mode = 'IMPS', purpose = 'payout' } = req.body;
+
+        const transaction = await WalletTransaction.findOneAndUpdate(
+            { _id: id, transactionCategory: 'withdrawal', status: 'pending' },
+            {
+                $set: {
+                    status: 'processing',
+                    'payoutDetails.approvedAt': new Date(),
+                    'payoutDetails.approvedBy': req.adminId
+                }
+            },
+            { new: true }
+        );
+        if (!transaction) {
+            const existing = await WalletTransaction.findOne({ _id: id, transactionCategory: 'withdrawal' }).select('status');
+            return res.status(existing ? 400 : 404).json({
+                success: false,
+                message: existing ? `Withdrawal is already ${existing.status}` : 'Withdrawal request not found'
+            });
+        }
+
+        const { user, bankDetails } = await getWithdrawalUserAndBank(transaction);
+        if (!user) {
+            transaction.status = 'pending';
+            transaction.payoutDetails.failureReason = `${transaction.userType} not found`;
+            await transaction.save();
+            return res.status(404).json({ success: false, message: `${transaction.userType} not found` });
+        }
+
+        if (!hasCompleteBankDetails(bankDetails)) {
+            transaction.status = 'pending';
+            transaction.payoutDetails.failureReason = 'Complete bank details are required before payout';
+            await transaction.save();
+            return res.status(400).json({ success: false, message: 'Complete bank details are required before payout' });
+        }
+
+        const payoutData = await createRazorpayXPayout({ transaction, user, bankDetails, mode, purpose });
+
+        transaction.status = 'completed';
+        transaction.transactionId = payoutData.payout.id;
+        transaction.payoutDetails = {
+            razorpayContactId: payoutData.contact.id,
+            razorpayFundAccountId: payoutData.fundAccount.id,
+            razorpayPayoutId: payoutData.payout.id,
+            bankAccountLast4: String(bankDetails.accountNumber).slice(-4),
+            ifscCode: String(bankDetails.ifscCode).toUpperCase(),
+            accountHolderName: bankDetails.accountHolderName,
+            mode,
+            purpose,
+            approvedAt: transaction.payoutDetails.approvedAt || new Date(),
+            approvedBy: req.adminId,
+            rawStatus: payoutData.payout.status
+        };
+        await transaction.save();
+
+        res.json({
+            success: true,
+            message: 'Withdrawal approved and Razorpay payout created',
+            data: {
+                transaction,
+                payout: {
+                    id: payoutData.payout.id,
+                    status: payoutData.payout.status,
+                    amount: payoutData.payout.amount / 100
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Approve withdrawal error:', error.response?.data || error.message);
+        if (req.params?.id) {
+            await WalletTransaction.findOneAndUpdate(
+                { _id: req.params.id, transactionCategory: 'withdrawal', status: 'processing' },
+                {
+                    $set: {
+                        status: 'pending',
+                        'payoutDetails.failureReason': error.response?.data?.error?.description || error.message
+                    }
+                }
+            );
+        }
+        res.status(500).json({
+            success: false,
+            message: error.response?.data?.error?.description || error.message || 'Failed to approve withdrawal'
+        });
+    }
+};
+
+export const rejectWithdrawal = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason = 'Rejected by admin' } = req.body;
+
+        const transaction = await WalletTransaction.findOne({ _id: id, transactionCategory: 'withdrawal' });
+        if (!transaction) {
+            return res.status(404).json({ success: false, message: 'Withdrawal request not found' });
+        }
+
+        if (transaction.status !== 'pending') {
+            return res.status(400).json({ success: false, message: `Withdrawal is already ${transaction.status}` });
+        }
+
+        const userModel = transaction.userType === 'Customer' ? Customer : Driver;
+        const user = await userModel.findById(transaction.userId);
+        if (!user) {
+            return res.status(404).json({ success: false, message: `${transaction.userType} not found` });
+        }
+
+        user.walletBalance += Math.abs(transaction.amount);
+        await user.save();
+
+        transaction.status = 'failed';
+        transaction.newBalance = user.walletBalance;
+        transaction.payoutDetails = transaction.payoutDetails || {};
+        transaction.payoutDetails.rejectedAt = new Date();
+        transaction.payoutDetails.rejectedBy = req.adminId;
+        transaction.payoutDetails.rejectionReason = reason;
+        await transaction.save();
+
+        res.json({
+            success: true,
+            message: 'Withdrawal rejected and amount returned to wallet',
+            data: {
+                transaction,
+                newBalance: user.walletBalance
+            }
+        });
+    } catch (error) {
+        console.error('Reject withdrawal error:', error);
+        res.status(500).json({ success: false, message: 'Failed to reject withdrawal' });
     }
 };
