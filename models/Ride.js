@@ -109,6 +109,7 @@ const rideSchema = new mongoose.Schema({
     distanceFare: { type: Number, default: 0 },
     total: { type: Number, required: true },
     discount: { type: Number, default: 0 },
+    cashbackAmount: { type: Number, default: 0 },
     finalAmount: { type: Number, required: true },
     commissionAmount: { type: Number, default: 0 },
     driverEarning: { type: Number, default: 0 },
@@ -314,28 +315,29 @@ rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car'
 
   const roundedTotal = Math.round(totalFare);
 
-  // Apply merchant 5% discount
-  const MERCHANT_DISCOUNT_PERCENT = 5;
+  // Apply merchant 5% cashback
+  const MERCHANT_CASHBACK_PERCENT = 5;
   let finalAmount = roundedTotal;
-  let discountAmount = 0;
+  let cashbackAmount = 0;
 
   if (isMerchant) {
-    discountAmount = Math.round(roundedTotal * MERCHANT_DISCOUNT_PERCENT / 100);
-    finalAmount    = roundedTotal - discountAmount;
+    cashbackAmount = Math.round(roundedTotal * MERCHANT_CASHBACK_PERCENT / 100);
   }
 
   return {
     distanceFare:     roundedTotal,
     total:            roundedTotal,
-    discount:         discountAmount,
+    discount:         0,
+    cashbackAmount:   cashbackAmount,
     finalAmount,
     isMerchantRide:   isMerchant,
-    merchantDiscount: isMerchant ? MERCHANT_DISCOUNT_PERCENT : 0,
+    merchantDiscount: isMerchant ? MERCHANT_CASHBACK_PERCENT : 0,
     breakdown: {
       ratePerKm:   `₹${ratePerKm}/km`,
       distance:    `${distance.toFixed(1)} km`,
       subtotal:    `₹${roundedTotal}`,
-      discount:    isMerchant ? `₹${discountAmount} (5% merchant discount)` : '₹0',
+      discount:    '₹0',
+      cashback:    isMerchant ? `₹${cashbackAmount} (5% added to wallet after ride)` : '₹0',
       total:       `₹${finalAmount}`
     }
   };

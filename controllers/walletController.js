@@ -268,3 +268,63 @@ export const requestWithdrawal = async (req, res) => {
         res.status(500).json({ success: false, message: 'Failed to process withdrawal' });
     }
 };
+
+// 5. Request Withdrawal (For Customers)
+export const requestCustomerWithdrawal = async (req, res) => {
+    try {
+        const customerId = req.customerId;
+        const { amount } = req.body;
+
+        if (!customerId) {
+            return res.status(401).json({ success: false, message: 'Unauthorized' });
+        }
+
+        if (!amount || amount <= 0) {
+            return res.status(400).json({ success: false, message: 'Valid amount is required' });
+        }
+
+        const customer = await Customer.findById(customerId);
+        if (!customer) {
+            return res.status(404).json({ success: false, message: 'Customer not found' });
+        }
+
+        // Check if customer has sufficient positive balance
+        if (customer.walletBalance < amount) {
+            return res.status(400).json({ success: false, message: `Insufficient balance. Your withdrawable balance is ₹${Math.max(0, customer.walletBalance)}` });
+        }
+
+        const previousBalance = customer.walletBalance;
+        
+        // Deduct from wallet immediately
+        customer.walletBalance -= amount;
+        await customer.save();
+
+        // Create transaction record
+        const transaction = new WalletTransaction({
+            userId: customer._id,
+            userType: 'Customer',
+            amount: -amount,
+            type: 'debit',
+            transactionCategory: 'withdrawal',
+            description: 'Withdrawal request',
+            previousBalance: previousBalance,
+            newBalance: customer.walletBalance,
+            status: 'pending' // pending until admin approves/processes
+        });
+        await transaction.save();
+
+        res.json({
+            success: true,
+            message: 'Withdrawal request submitted successfully',
+            data: {
+                transactionId: transaction._id,
+                amountWithdrawn: amount,
+                newBalance: customer.walletBalance
+            }
+        });
+
+    } catch (error) {
+        console.error('Request customer withdrawal error:', error);
+        res.status(500).json({ success: false, message: 'Failed to process withdrawal' });
+    }
+};

@@ -24,7 +24,7 @@ router.post(
   upload.fields([
     { name: 'aadharFront', maxCount: 1 },
     { name: 'aadharBack',  maxCount: 1 },
-    { name: 'ghumastaDoc', maxCount: 1 },
+    { name: 'businessDoc', maxCount: 1 },
     { name: 'panCard',     maxCount: 1 }
   ]),
   handleMulterError,

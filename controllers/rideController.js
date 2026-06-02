@@ -652,6 +652,7 @@ export const requestRide = async (req, res) => {
         distanceFare:     fare.distanceFare,
         total:            fare.total,
         discount:         fare.discount,
+        cashbackAmount:   fare.cashbackAmount,
         finalAmount:      fare.finalAmount,
         isMerchantRide:   fare.isMerchantRide,
         merchantDiscount: fare.merchantDiscount
@@ -717,7 +718,7 @@ export const requestRide = async (req, res) => {
           totalDistance: `${totalDistance.toFixed(1)} km`,
           totalFare: `₹${fare.finalAmount}`,
           merchantDiscount: fare.isMerchantRide
-            ? { applied: true, percent: fare.merchantDiscount, saved: `₹${fare.discount}` }
+            ? { applied: true, percent: fare.merchantDiscount, cashback: `₹${fare.cashbackAmount}` }
             : { applied: false }
         },
         isMerchantRide: fare.isMerchantRide,
@@ -1341,6 +1342,35 @@ export const completeRide = async (req, res) => {
 
         ride.paymentStatus = 'completed';
         await ride.save();
+      }
+    }
+    // ===================================================================
+
+    // ====== MERCHANT CASHBACK: Credit cashback to customer wallet ======
+    if (ride.fare.isMerchantRide && ride.fare.cashbackAmount > 0) {
+      const customer = await Customer.findById(ride.customer.customerId);
+      if (customer) {
+        const custPrevBalance = customer.walletBalance;
+        customer.walletBalance += ride.fare.cashbackAmount;
+        await customer.save();
+        
+        // Update customerWalletNew if it was already fetched for wallet ride
+        if (customerWalletNew !== null) {
+            customerWalletNew = customer.walletBalance;
+        }
+
+        await WalletTransaction.create({
+          userId: customer._id,
+          userType: 'Customer',
+          amount: ride.fare.cashbackAmount,
+          type: 'credit',
+          transactionCategory: 'bonus',
+          description: `Merchant cashback for ride ${ride.rideId}`,
+          previousBalance: custPrevBalance,
+          newBalance: customer.walletBalance,
+          orderId: ride._id,
+          status: 'completed'
+        });
       }
     }
     // ===================================================================

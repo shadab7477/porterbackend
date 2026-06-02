@@ -62,17 +62,17 @@ export const applyForMerchant = async (req, res) => {
       });
     }
 
-    const { businessName, ghumastaNumber, panNumber, aadharNumber } = req.body;
+    const { businessName, businessRegistrationNumber, panNumber, aadharNumber } = req.body;
 
-    if (!businessName || !ghumastaNumber || !panNumber || !aadharNumber) {
+    if (!businessName || !businessRegistrationNumber || !panNumber || !aadharNumber) {
       return res.status(400).json({
         success: false,
-        message: 'businessName, ghumastaNumber, panNumber, and aadharNumber are required.'
+        message: 'businessName, businessRegistrationNumber, panNumber, and aadharNumber are required.'
       });
     }
 
     const uploadedFiles = req.files || {};
-    const required = ['aadharFront', 'aadharBack', 'ghumastaDoc', 'panCard'];
+    const required = ['aadharFront', 'aadharBack', 'businessDoc', 'panCard'];
     const missing  = required.filter(f => !uploadedFiles[f] || uploadedFiles[f].length === 0);
     if (missing.length > 0) {
       return res.status(400).json({
@@ -84,11 +84,11 @@ export const applyForMerchant = async (req, res) => {
     const folder = `merchant-documents/${customerId}`;
 
     // Upload documents to Cloudinary
-    let aadharFrontDoc, aadharBackDoc, ghumastaDocFile, panCardDoc;
+    let aadharFrontDoc, aadharBackDoc, businessDocFile, panCardDoc;
     try {
       aadharFrontDoc  = await uploadFile(uploadedFiles.aadharFront,  folder, 'Aadhaar Front');
       aadharBackDoc   = await uploadFile(uploadedFiles.aadharBack,   folder, 'Aadhaar Back');
-      ghumastaDocFile = await uploadFile(uploadedFiles.ghumastaDoc,  folder, 'Ghumasta Doc');
+      businessDocFile = await uploadFile(uploadedFiles.businessDoc,  folder, 'Business Doc');
       panCardDoc      = await uploadFile(uploadedFiles.panCard,      folder, 'PAN Card');
     } catch (uploadErr) {
       return res.status(400).json({ success: false, message: uploadErr.message });
@@ -100,7 +100,7 @@ export const applyForMerchant = async (req, res) => {
       customerPhone: customer.phone,
       customerName:  customer.name || '',
       businessName,
-      ghumastaNumber,
+      businessRegistrationNumber,
       panNumber: panNumber.toUpperCase(),
       aadharCard: {
         front: aadharFrontDoc,
@@ -108,7 +108,7 @@ export const applyForMerchant = async (req, res) => {
         aadharNumber,
         verification: { status: 'pending' }
       },
-      ghumastaDoc: ghumastaDocFile,
+      businessDoc: businessDocFile,
       panCard:     panCardDoc,
       status:      'pending',
       submittedAt: new Date()
@@ -235,7 +235,7 @@ export const verifyMerchantDocument = async (req, res) => {
     const { id, docType } = req.params;
     const { status, rejectionReason } = req.body;
 
-    const validDocTypes = ['aadharFront', 'aadharBack', 'ghumastaDoc', 'panCard'];
+    const validDocTypes = ['aadharFront', 'aadharBack', 'businessDoc', 'panCard'];
     if (!validDocTypes.includes(docType)) {
       return res.status(400).json({
         success: false,
@@ -273,11 +273,11 @@ export const verifyMerchantDocument = async (req, res) => {
         return res.status(400).json({ success: false, message: 'Aadhaar back not found' });
       }
       application.aadharCard.back.verification = verificationData;
-    } else if (docType === 'ghumastaDoc') {
-      if (!application.ghumastaDoc) {
-        return res.status(400).json({ success: false, message: 'Ghumasta doc not found' });
+    } else if (docType === 'businessDoc') {
+      if (!application.businessDoc) {
+        return res.status(400).json({ success: false, message: 'Business doc not found' });
       }
-      application.ghumastaDoc.verification = verificationData;
+      application.businessDoc.verification = verificationData;
     } else if (docType === 'panCard') {
       if (!application.panCard) {
         return res.status(400).json({ success: false, message: 'PAN card not found' });

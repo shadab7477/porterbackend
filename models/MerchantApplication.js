@@ -50,12 +50,12 @@ const merchantApplicationSchema = new mongoose.Schema(
 
     // Business info
     businessName:   { type: String, trim: true },
-    ghumastaNumber: { type: String, trim: true },
+    businessRegistrationNumber: { type: String, trim: true },
     panNumber:      { type: String, trim: true, uppercase: true },
 
     // Documents (all uploaded to Cloudinary)
     aadharCard:   { type: aadharDocSchema,  default: null },
-    ghumastaDoc:  { type: documentSchema,   default: null },
+    businessDoc:  { type: documentSchema,   default: null },
     panCard:      { type: documentSchema,   default: null },
 
     // Overall application status
@@ -86,17 +86,17 @@ merchantApplicationSchema.methods.calculateOverallStatus = function () {
   const aadharOk =
     this.aadharCard?.front?.verification?.status === 'verified' &&
     this.aadharCard?.back?.verification?.status === 'verified';
-  const ghumastaOk = this.ghumastaDoc?.verification?.status === 'verified';
+  const businessDocOk = this.businessDoc?.verification?.status === 'verified';
   const panOk       = this.panCard?.verification?.status === 'verified';
 
   const anyRejected =
     this.aadharCard?.front?.verification?.status === 'rejected' ||
     this.aadharCard?.back?.verification?.status  === 'rejected' ||
-    this.ghumastaDoc?.verification?.status        === 'rejected' ||
+    this.businessDoc?.verification?.status        === 'rejected' ||
     this.panCard?.verification?.status            === 'rejected';
 
   if (anyRejected) return 'under_review';
-  if (aadharOk && ghumastaOk && panOk) return 'approved'; // auto-approve when all docs verified
+  if (aadharOk && businessDocOk && panOk) return 'approved'; // auto-approve when all docs verified
   return 'under_review';
 };
 
