@@ -174,7 +174,7 @@ export const getApplicationById = async (req, res) => {
 
     // Add document verification summary
     const documentVerificationSummary = {
-      totalDocuments: 7,
+      totalDocuments: 0,
       verified: 0,
       rejected: 0,
       pending: 0,
@@ -193,6 +193,7 @@ export const getApplicationById = async (req, res) => {
           if (application.bankDetails.verification?.status === 'verified') documentVerificationSummary.verified++;
           else if (application.bankDetails.verification?.status === 'rejected') documentVerificationSummary.rejected++;
           else documentVerificationSummary.pending++;
+          documentVerificationSummary.totalDocuments++;
         } else {
           documentVerificationSummary.documents[type] = { exists: false };
         }
@@ -209,6 +210,7 @@ export const getApplicationById = async (req, res) => {
           if (document.verification?.status === 'verified') documentVerificationSummary.verified++;
           else if (document.verification?.status === 'rejected') documentVerificationSummary.rejected++;
           else documentVerificationSummary.pending++;
+          documentVerificationSummary.totalDocuments++;
         } else {
           documentVerificationSummary.documents[type] = { exists: false };
         }
