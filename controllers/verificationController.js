@@ -107,11 +107,29 @@ const getDocumentStatusPath = (documentType) => {
 // Get all applications with filtering
 export const getApplications = async (req, res) => {
   try {
-    const { status, documentStatus, page = 1, limit = 10 } = req.query;
+    const { status, documentStatus, paymentStatus, page = 1, limit = 10 } = req.query;
     
     let query = {};
+    const addAndCondition = (condition) => {
+      query.$and = query.$and || [];
+      query.$and.push(condition);
+    };
+
     if (status && status !== 'all') {
       query.verificationStatus = status;
+    }
+
+    if (paymentStatus === 'completed') {
+      query['subscriptionPayment.status'] = 'completed';
+    } else if (paymentStatus === 'remaining') {
+      addAndCondition({
+        $or: [
+          { 'subscriptionPayment.status': { $exists: false } },
+          { 'subscriptionPayment.status': { $ne: 'completed' } }
+        ]
+      });
+    } else if (paymentStatus && paymentStatus !== 'all') {
+      query['subscriptionPayment.status'] = paymentStatus;
     }
 
     // Filter by specific document status if provided
@@ -122,10 +140,12 @@ export const getApplications = async (req, res) => {
       if (docType === 'bankDetails') {
         query['bankDetails.verification.status'] = docStatus;
       } else if (docType === 'aadharCard') {
-        query.$or = [
-          { 'aadharCard.front.verification.status': docStatus },
-          { 'aadharCard.back.verification.status': docStatus }
-        ];
+        addAndCondition({
+          $or: [
+            { 'aadharCard.front.verification.status': docStatus },
+            { 'aadharCard.back.verification.status': docStatus }
+          ]
+        });
       } else if (documentTypes.includes(docType)) {
         query[`${docType}.verification.status`] = docStatus;
       }
@@ -701,6 +721,17 @@ export const getStats = async (req, res) => {
       reviewedAt: { $gte: today },
     });
 
+    const paymentCompleted = await DriverApplication.countDocuments({
+      'subscriptionPayment.status': 'completed'
+    });
+
+    const paymentRemaining = await DriverApplication.countDocuments({
+      $or: [
+        { 'subscriptionPayment.status': { $exists: false } },
+        { 'subscriptionPayment.status': { $ne: 'completed' } }
+      ]
+    });
+
     const result = {
       pending: 0,
       submitted: 0,
@@ -709,6 +740,8 @@ export const getStats = async (req, res) => {
       verified: 0,
       rejected: 0,
       todayVerified,
+      paymentCompleted,
+      paymentRemaining,
       total: await DriverApplication.countDocuments(),
       documentStats
     };
