@@ -4,7 +4,8 @@ import DriverApplication from '../models/DriverApplication.js';
 // Document types that can be verified
 const documentTypes = [
   'profilePhoto',
-  'aadharCard',
+  'aadharFront',
+  'aadharBack',
   'panCard',
   'drivingLicense',
   'vehicleRC',
@@ -12,6 +13,96 @@ const documentTypes = [
   'vehiclePhoto',
   'bankDetails'
 ];
+
+const verifiableDocumentTypes = [...documentTypes, 'aadharCard'];
+
+const getDocumentForType = (application, documentType) => {
+  if (documentType === 'bankDetails') {
+    return application.bankDetails?.accountNumber ? application.bankDetails : null;
+  }
+
+  if (documentType === 'aadharFront') {
+    return application.aadharCard?.front || null;
+  }
+
+  if (documentType === 'aadharBack') {
+    return application.aadharCard?.back || null;
+  }
+
+  if (documentType === 'aadharCard') {
+    return application.aadharCard?.front || application.aadharCard?.back ? application.aadharCard : null;
+  }
+
+  return application[documentType]?.url ? application[documentType] : null;
+};
+
+const setDocumentVerification = (application, documentType, verificationData) => {
+  if (documentType === 'bankDetails') {
+    application.bankDetails.verification = verificationData;
+    return;
+  }
+
+  if (documentType === 'aadharFront') {
+    application.aadharCard.front.verification = verificationData;
+    application.aadharCard.verification = application.aadharCard.verification || {};
+    return;
+  }
+
+  if (documentType === 'aadharBack') {
+    application.aadharCard.back.verification = verificationData;
+    application.aadharCard.verification = application.aadharCard.verification || {};
+    return;
+  }
+
+  if (documentType === 'aadharCard') {
+    if (application.aadharCard?.front) {
+      application.aadharCard.front.verification = verificationData;
+    }
+    if (application.aadharCard?.back) {
+      application.aadharCard.back.verification = verificationData;
+    }
+    application.aadharCard.verification = verificationData;
+    return;
+  }
+
+  application[documentType].verification = verificationData;
+};
+
+const syncAadharOverallVerification = (application) => {
+  const frontStatus = application.aadharCard?.front?.verification?.status;
+  const backStatus = application.aadharCard?.back?.verification?.status;
+
+  if (!application.aadharCard || (!frontStatus && !backStatus)) {
+    return;
+  }
+
+  if (frontStatus === 'rejected' || backStatus === 'rejected') {
+    application.aadharCard.verification = { status: 'rejected' };
+    return;
+  }
+
+  if ((!application.aadharCard.front || frontStatus === 'verified') &&
+      (!application.aadharCard.back || backStatus === 'verified')) {
+    application.aadharCard.verification = { status: 'verified' };
+    return;
+  }
+
+  application.aadharCard.verification = { status: 'pending' };
+};
+
+const getDocumentMatchPath = (documentType) => {
+  if (documentType === 'bankDetails') return 'bankDetails.accountNumber';
+  if (documentType === 'aadharFront') return 'aadharCard.front.url';
+  if (documentType === 'aadharBack') return 'aadharCard.back.url';
+  return `${documentType}.url`;
+};
+
+const getDocumentStatusPath = (documentType) => {
+  if (documentType === 'bankDetails') return '$bankDetails.verification.status';
+  if (documentType === 'aadharFront') return '$aadharCard.front.verification.status';
+  if (documentType === 'aadharBack') return '$aadharCard.back.verification.status';
+  return `$${documentType}.verification.status`;
+};
 
 // Get all applications with filtering
 export const getApplications = async (req, res) => {
@@ -30,6 +121,11 @@ export const getApplications = async (req, res) => {
       
       if (docType === 'bankDetails') {
         query['bankDetails.verification.status'] = docStatus;
+      } else if (docType === 'aadharCard') {
+        query.$or = [
+          { 'aadharCard.front.verification.status': docStatus },
+          { 'aadharCard.back.verification.status': docStatus }
+        ];
       } else if (documentTypes.includes(docType)) {
         query[`${docType}.verification.status`] = docStatus;
       }
@@ -101,16 +197,17 @@ export const getApplicationById = async (req, res) => {
           documentVerificationSummary.documents[type] = { exists: false };
         }
       } else {
-        if (application[type]?.url) {
+        const document = getDocumentForType(application, type);
+        if (document) {
           documentVerificationSummary.documents[type] = {
             exists: true,
-            status: application[type].verification?.status || 'pending',
-            uploadedAt: application[type].uploadedAt,
-            rejectionReason: application[type].verification?.rejectionReason
+            status: document.verification?.status || 'pending',
+            uploadedAt: document.uploadedAt,
+            rejectionReason: document.verification?.rejectionReason
           };
           
-          if (application[type].verification?.status === 'verified') documentVerificationSummary.verified++;
-          else if (application[type].verification?.status === 'rejected') documentVerificationSummary.rejected++;
+          if (document.verification?.status === 'verified') documentVerificationSummary.verified++;
+          else if (document.verification?.status === 'rejected') documentVerificationSummary.rejected++;
           else documentVerificationSummary.pending++;
         } else {
           documentVerificationSummary.documents[type] = { exists: false };
@@ -141,11 +238,11 @@ export const verifyDocument = async (req, res) => {
     const { id, documentType } = req.params;
     const { status, rejectionReason, comments } = req.body;
 
-    if (!documentTypes.includes(documentType)) {
+    if (!verifiableDocumentTypes.includes(documentType)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid document type',
-        validTypes: documentTypes
+        validTypes: verifiableDocumentTypes
       });
     }
 
@@ -172,20 +269,12 @@ export const verifyDocument = async (req, res) => {
     }
 
     // Check if document exists
-    if (documentType === 'bankDetails') {
-      if (!application.bankDetails?.accountNumber) {
-        return res.status(400).json({
-          success: false,
-          message: 'Bank details not found in application'
-        });
-      }
-    } else {
-      if (!application[documentType]?.url) {
-        return res.status(400).json({
-          success: false,
-          message: `${documentType} not found in application`
-        });
-      }
+    const document = getDocumentForType(application, documentType);
+    if (!document) {
+      return res.status(400).json({
+        success: false,
+        message: `${documentType} not found in application`
+      });
     }
 
     // Update document verification status
@@ -196,14 +285,8 @@ export const verifyDocument = async (req, res) => {
       comments: comments || ''
     };
 
-    if (documentType === 'bankDetails') {
-      application.bankDetails.verification = verificationData;
-    } else {
-      if (!application[documentType].verification) {
-        application[documentType].verification = {};
-      }
-      application[documentType].verification = verificationData;
-    }
+    setDocumentVerification(application, documentType, verificationData);
+    syncAadharOverallVerification(application);
 
     // Calculate and update overall status
     application.verificationStatus = application.calculateOverallStatus();
@@ -247,7 +330,6 @@ export const verifyDriver = async (req, res) => {
     // Verify all existing documents
     const documents = [
       'profilePhoto',
-      'aadharCard',
       'panCard',
       'drivingLicense',
       'vehicleRC',
@@ -263,6 +345,27 @@ export const verifyDriver = async (req, res) => {
         };
       }
     });
+
+    if (application.aadharCard?.front) {
+      application.aadharCard.front.verification = {
+        status: 'verified',
+        verifiedAt: new Date()
+      };
+    }
+
+    if (application.aadharCard?.back) {
+      application.aadharCard.back.verification = {
+        status: 'verified',
+        verifiedAt: new Date()
+      };
+    }
+
+    if (application.aadharCard?.front || application.aadharCard?.back) {
+      application.aadharCard.verification = {
+        status: 'verified',
+        verifiedAt: new Date()
+      };
+    }
 
     if (application.bankDetails?.accountNumber) {
       application.bankDetails.verification = {
@@ -316,7 +419,6 @@ export const rejectDriver = async (req, res) => {
     // Reject all documents
     const documents = [
       'profilePhoto',
-      'aadharCard',
       'panCard',
       'drivingLicense',
       'vehicleRC',
@@ -333,6 +435,30 @@ export const rejectDriver = async (req, res) => {
         };
       }
     });
+
+    if (application.aadharCard?.front) {
+      application.aadharCard.front.verification = {
+        status: 'rejected',
+        verifiedAt: new Date(),
+        rejectionReason: reason
+      };
+    }
+
+    if (application.aadharCard?.back) {
+      application.aadharCard.back.verification = {
+        status: 'rejected',
+        verifiedAt: new Date(),
+        rejectionReason: reason
+      };
+    }
+
+    if (application.aadharCard?.front || application.aadharCard?.back) {
+      application.aadharCard.verification = {
+        status: 'rejected',
+        verifiedAt: new Date(),
+        rejectionReason: reason
+      };
+    }
 
     if (application.bankDetails?.accountNumber) {
       application.bankDetails.verification = {
@@ -389,36 +515,29 @@ export const updateStatus = async (req, res) => {
 
     // If documentType is provided, update specific document status
     if (documentType) {
-      if (!documentTypes.includes(documentType)) {
+      if (!verifiableDocumentTypes.includes(documentType)) {
         return res.status(400).json({
           success: false,
           message: 'Invalid document type',
         });
       }
 
-      if (documentType === 'bankDetails') {
-        if (!application.bankDetails?.accountNumber) {
-          return res.status(400).json({
-            success: false,
-            message: 'Bank details not found',
-          });
-        }
-        application.bankDetails.verification.status = status;
-        if (status === 'verified' || status === 'rejected') {
-          application.bankDetails.verification.verifiedAt = new Date();
-        }
-      } else {
-        if (!application[documentType]?.url) {
-          return res.status(400).json({
-            success: false,
-            message: `${documentType} not found`,
-          });
-        }
-        application[documentType].verification.status = status;
-        if (status === 'verified' || status === 'rejected') {
-          application[documentType].verification.verifiedAt = new Date();
-        }
+      const document = getDocumentForType(application, documentType);
+      if (!document) {
+        return res.status(400).json({
+          success: false,
+          message: `${documentType} not found`,
+        });
       }
+
+      const verificationData = {
+        ...(document.verification?.toObject?.() || document.verification || {}),
+        status,
+        verifiedAt: status === 'verified' || status === 'rejected' ? new Date() : document.verification?.verifiedAt
+      };
+
+      setDocumentVerification(application, documentType, verificationData);
+      syncAadharOverallVerification(application);
 
       // Recalculate overall status
       application.verificationStatus = application.calculateOverallStatus();
@@ -486,14 +605,15 @@ export const getDocumentVerificationSummary = async (req, res) => {
           summary.documents[type] = { exists: false };
         }
       } else {
-        if (application[type]?.url) {
+        const document = getDocumentForType(application, type);
+        if (document) {
           summary.documents[type] = {
             exists: true,
-            status: application[type].verification?.status || 'pending',
-            uploadedAt: application[type].uploadedAt,
-            verifiedAt: application[type].verification?.verifiedAt,
-            rejectionReason: application[type].verification?.rejectionReason,
-            comments: application[type].verification?.comments
+            status: document.verification?.status || 'pending',
+            uploadedAt: document.uploadedAt,
+            verifiedAt: document.verification?.verifiedAt,
+            rejectionReason: document.verification?.rejectionReason,
+            comments: document.verification?.comments
           };
           
           // Add document-specific details
@@ -547,15 +667,11 @@ export const getStats = async (req, res) => {
     for (const docType of documentTypes) {
       const stats = await DriverApplication.aggregate([
         {
-          $match: docType === 'bankDetails' 
-            ? { 'bankDetails.accountNumber': { $exists: true } }
-            : { [`${docType}.url`]: { $exists: true } }
+          $match: { [getDocumentMatchPath(docType)]: { $exists: true } }
         },
         {
           $group: {
-            _id: docType === 'bankDetails' 
-              ? '$bankDetails.verification.status'
-              : `$${docType}.verification.status`,
+            _id: getDocumentStatusPath(docType),
             count: { $sum: 1 }
           }
         }
