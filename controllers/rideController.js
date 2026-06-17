@@ -950,7 +950,7 @@ export const acceptRide = async (req, res) => {
 
     const io = req.app.get('io');
 
-    io.emit(`ride:${ride.rideId}:accepted`, {
+    const acceptanceData = {
       rideId: ride.rideId,
       driver: {
         driverId: driver._id,
@@ -966,7 +966,30 @@ export const acceptRide = async (req, res) => {
       eta: etaInfo.duration,
       etaText: etaInfo.durationText,
       distanceToPickup: etaInfo.distance,
-      distanceToPickupText: etaInfo.distanceText
+      distanceToPickupText: etaInfo.distanceText,
+      pickupLocation: ride.pickupLocation,
+      dropLocation: ride.dropLocation,
+      dropLocations: ride.dropLocations || [],
+      totalStops: ride.dropLocations?.length || 1,
+      fare: ride.fare.total
+    };
+
+    // Broadcast compatibility event
+    io.emit(`ride:${ride.rideId}:accepted`, acceptanceData);
+
+    // Notify customer on their specific channel
+    io.to(`customer:${ride.customer.customerId}`).emit('ride:accepted', acceptanceData);
+
+    // Notify customer on the ride tracking channel (default namespace room)
+    io.to(`ride:${ride.rideId}`).emit('ride:accepted', acceptanceData);
+    io.to(`ride:${ride.rideId}`).emit('ride:status-changed', {
+      rideId: ride.rideId,
+      status: 'driver_assigned',
+      driver: acceptanceData.driver,
+      eta: etaInfo.duration,
+      etaText: etaInfo.durationText,
+      timestamp: new Date(),
+      message: 'Driver assigned to your ride'
     });
 
     if (ride.driversNotified && ride.driversNotified.length > 0) {
@@ -1099,6 +1122,19 @@ export const driverArrived = async (req, res) => {
       arrivedAt: ride.driverArrivedAt
     });
 
+    // Notify customer on default namespace ride tracking channel
+    io.to(`ride:${ride.rideId}`).emit('driver:arrived', {
+      rideId: ride.rideId,
+      message: 'Your driver has arrived at pickup location',
+      arrivedAt: ride.driverArrivedAt
+    });
+    io.to(`ride:${ride.rideId}`).emit('ride:status-changed', {
+      rideId: ride.rideId,
+      status: 'driver_arrived',
+      timestamp: new Date(),
+      message: 'Driver has arrived at pickup location'
+    });
+
     const requiresPayment = ride.paymentMethod !== 'cash' && ride.paymentStatus !== 'completed';
     if (requiresPayment) {
       io.emit(`ride:${ride.rideId}:payment_required`, {
@@ -1175,11 +1211,26 @@ export const startRide = async (req, res) => {
     await ride.save();
 
     const io = req.app.get('io');
+
     io.emit(`ride:${ride.rideId}:started`, {
       rideId: ride.rideId,
       message: 'Your ride has started',
       startedAt: ride.rideStartedAt,
       receiver: ride.receiver
+    });
+
+    // Notify customer on default namespace ride tracking channel
+    io.to(`ride:${ride.rideId}`).emit('ride:started', {
+      rideId: ride.rideId,
+      message: 'Your ride has started',
+      startedAt: ride.rideStartedAt,
+      receiver: ride.receiver
+    });
+    io.to(`ride:${ride.rideId}`).emit('ride:status-changed', {
+      rideId: ride.rideId,
+      status: 'in_progress',
+      timestamp: new Date(),
+      message: 'Ride is in progress'
     });
 
     res.json({
@@ -1391,8 +1442,7 @@ export const completeRide = async (req, res) => {
 
     const io = req.app.get('io');
 
-    // Notify CUSTOMER — ride done + how much was deducted
-    io.emit(`ride:${ride.rideId}:completed`, {
+    const completionData = {
       rideId: ride.rideId,
       message: 'Parcel delivered successfully',
       fare: ride.fare.finalAmount,
@@ -1407,6 +1457,18 @@ export const completeRide = async (req, res) => {
         walletDeducted: ride.fare.finalAmount,
         newWalletBalance: customerWalletNew
       })
+    };
+
+    // Notify CUSTOMER — ride done + how much was deducted
+    io.emit(`ride:${ride.rideId}:completed`, completionData);
+
+    // Notify customer on default namespace ride tracking channel
+    io.to(`ride:${ride.rideId}`).emit('ride:completed', completionData);
+    io.to(`ride:${ride.rideId}`).emit('ride:status-changed', {
+      rideId: ride.rideId,
+      status: 'completed',
+      timestamp: new Date(),
+      message: 'Ride completed'
     });
 
     // Notify DRIVER — earnings credited
@@ -1453,7 +1515,8 @@ export const completeRide = async (req, res) => {
 // ==================== CANCEL RIDE - FIXED VERSION ====================
 export const cancelRide = async (req, res) => {
   try {
-    const { rideId, reason } = req.body;
+    const rideId = req.params.rideId || req.body.rideId;
+    const reason = req.body.reason || req.body.cancelReason;
 
     // FIX: Properly determine user type and ID from request
     let userType = null;
@@ -1512,7 +1575,7 @@ export const cancelRide = async (req, res) => {
     });
 
     // Check if ride can be cancelled
-    const cancellableStatuses = ['requested', 'searching', 'driver_assigned'];
+    const cancellableStatuses = ['requested', 'searching', 'driver_assigned', 'driver_arrived', 'in_progress', 'no_drivers'];
     if (!cancellableStatuses.includes(ride.status)) {
       return res.status(400).json({
         success: false,
@@ -1640,6 +1703,15 @@ export const cancelRide = async (req, res) => {
       rideTrackingNsp.to(`ride:${ride.rideId}`).emit('ride:cancelled', cancellationData);
       console.log(`📡 Cancellation emitted to ride tracking room: ride:${ride.rideId}`);
     }
+
+    // Notify customer/driver on default namespace ride tracking channel
+    io.to(`ride:${ride.rideId}`).emit('ride:cancelled', cancellationData);
+    io.to(`ride:${ride.rideId}`).emit('ride:status-changed', {
+      rideId: ride.rideId,
+      status: 'cancelled',
+      timestamp: new Date(),
+      message: `Ride cancelled by ${userType}`
+    });
 
     // 5. Notify admin for monitoring
     io.of('/admin').to('admin-room').emit('ride:cancelled', {
@@ -2665,7 +2737,10 @@ export const acceptRideWithSocket = async (req, res) => {
       });
     }
 
-    const ride = await Ride.findOne({ rideId, status: 'searching' });
+    const ride = await Ride.findOne({
+      rideId,
+      status: { $in: ['searching', 'no_drivers'] }
+    });
     if (!ride) {
       return res.status(404).json({
         success: false,
@@ -2739,6 +2814,18 @@ export const acceptRideWithSocket = async (req, res) => {
 
     // Notify customer
     io.to(`customer:${ride.customer.customerId}`).emit('ride:accepted', acceptanceData);
+
+    // Notify customer on the ride tracking channel (default namespace room)
+    io.to(`ride:${ride.rideId}`).emit('ride:accepted', acceptanceData);
+    io.to(`ride:${ride.rideId}`).emit('ride:status-changed', {
+      rideId: ride.rideId,
+      status: 'driver_assigned',
+      driver: acceptanceData.driver,
+      eta: etaToPickup,
+      etaText: `${etaToPickup} mins`,
+      timestamp: new Date(),
+      message: 'Driver assigned to your ride'
+    });
 
     // Also emit to ride tracking namespace
     const rideTrackingNsp = io.of('/ride-tracking');

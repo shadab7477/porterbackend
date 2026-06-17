@@ -8,8 +8,8 @@ const initializeSockets = (io) => {
   const driversNsp = io.of('/drivers');
   const bookingsNsp = io.of('/bookings');
 
-  // Auto-offline: Mark drivers as offline if no activity for 5 minutes
-  const INACTIVITY_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+  // Auto-offline: Mark drivers as offline if no activity for 180 minutes
+  const INACTIVITY_TIMEOUT = 180 * 60 * 1000; // 180 minutes
   setInterval(async () => {
     try {
       const fiveMinutesAgo = new Date(Date.now() - INACTIVITY_TIMEOUT);
@@ -46,7 +46,7 @@ const initializeSockets = (io) => {
     } catch (error) {
       console.error('Error in auto-offline check:', error);
     }
-  }, 60000); // Check every minute
+  }, 120000); // Check every minute
 
   // ============== ADMIN NAMESPACE ==============
   adminNsp.on('connection', (socket) => {

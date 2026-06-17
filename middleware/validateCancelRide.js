@@ -3,12 +3,12 @@ import Ride from "../models/Ride.js";
 
 export const validateCancelRide = async (req, res, next) => {
   try {
-    const { rideId } = req.body;
-    
+    const rideId = req.params.rideId || req.body.rideId;
+
     // FIX: Properly determine user type and ID
     let userType = null;
     let userId = null;
-    
+
     // Check if it's a customer (has customerId from customerAuthMiddleware)
     if (req.customerId) {
       userType = 'customer';
@@ -27,7 +27,7 @@ export const validateCancelRide = async (req, res, next) => {
       userId = req.adminId;
       console.log('🔍 Validation - Admin:', { userId, rideId });
     }
-    
+
     if (!userType || !userId) {
       console.error('❌ Validation failed: No user type or ID found', {
         hasCustomerId: !!req.customerId,
@@ -80,7 +80,7 @@ export const validateCancelRide = async (req, res, next) => {
     }
 
     // Check if ride can be cancelled based on status
-    const cancellableStatuses = ['requested', 'searching', 'driver_assigned'];
+    const cancellableStatuses = ['requested', 'searching', 'driver_assigned', 'driver_arrived', 'in_progress', 'no_drivers'];
     if (!cancellableStatuses.includes(ride.status)) {
       return res.status(400).json({
         success: false,
@@ -90,7 +90,7 @@ export const validateCancelRide = async (req, res, next) => {
 
     // Check authorization
     let isAuthorized = false;
-    
+
     if (userType === 'customer') {
       const rideCustomerId = ride.customer?.customerId?.toString();
       if (rideCustomerId === userId.toString()) {
@@ -99,7 +99,7 @@ export const validateCancelRide = async (req, res, next) => {
       } else {
         console.log('❌ Customer validation failed:', { rideCustomerId, userId });
       }
-    } 
+    }
     else if (userType === 'driver') {
       const rideDriverId = ride.driver?.driverId?.toString();
       if (rideDriverId === userId.toString()) {
@@ -113,7 +113,7 @@ export const validateCancelRide = async (req, res, next) => {
       isAuthorized = true;
       console.log('✅ Admin validation passed');
     }
-    
+
     if (!isAuthorized) {
       return res.status(403).json({
         success: false,

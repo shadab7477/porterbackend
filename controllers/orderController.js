@@ -2,10 +2,55 @@ import Order from '../models/Order.js';
 import Customer from '../models/Customer.js';
 import Driver from '../models/Driver.js';
 import Vehicle from '../models/Vehicle.js';
+import { sendNotification } from '../utils/notificationService.js';
 import crypto from 'crypto';
 
 const generateBookingId = () => {
   return 'BK' + Date.now().toString(36).toUpperCase() + crypto.randomBytes(2).toString('hex').toUpperCase();
+};
+
+const notifyAvailableDrivers = async (order, io) => {
+  const eligibleDrivers = await Driver.find({
+    isActive: true,
+    isOnline: true,
+    isAvailable: true,
+    isVerified: true,
+    verificationStatus: 'verified',
+    vehicleType: order.vehicleType
+  }).select('name phone socketId fcmToken vehicleType');
+
+  if (!eligibleDrivers.length) return [];
+
+  const eventData = {
+    order,
+    timestamp: new Date(),
+    notificationType: 'new_booking'
+  };
+
+  eligibleDrivers.forEach((driver) => {
+    if (driver.socketId) {
+      io.to(driver.socketId).emit('booking:new', eventData);
+    }
+  });
+
+  const pushPromises = eligibleDrivers
+    .filter((driver) => driver.fcmToken)
+    .map((driver) =>
+      sendNotification(
+        driver.fcmToken,
+        'New ride booking',
+        `A new ${order.vehicleType} ride is available for booking.`,
+        {
+          orderId: order._id.toString(),
+          bookingId: order.bookingId,
+          vehicleType: order.vehicleType,
+          notificationType: 'new_booking'
+        }
+      )
+    );
+
+  await Promise.allSettled(pushPromises);
+  return eligibleDrivers;
 };
 
 export const getAllOrders = async (req, res) => {
@@ -103,6 +148,8 @@ export const createOrder = async (req, res) => {
       timestamp: new Date()
     });
 
+    await notifyAvailableDrivers(populatedOrder, io);
+
     res.status(201).json({ success: true, data: populatedOrder });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -139,6 +186,13 @@ export const assignDriver = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Driver is not verified' });
     }
 
+    if (driver.vehicleType !== order.vehicleType) {
+      return res.status(400).json({
+        success: false,
+        message: `Driver vehicle type (${driver.vehicleType}) does not match requested order vehicle type (${order.vehicleType})`
+      });
+    }
+
     order.driverId = driverId;
     order.status = 'assigned';
     order.assignedAt = new Date();
@@ -167,6 +221,11 @@ export const assignDriver = async (req, res) => {
         timestamp: new Date()
       });
     }
+
+    io.to(`driver:${driver._id}`).emit('booking:assigned-to-me', {
+      order: populatedOrder,
+      timestamp: new Date()
+    });
 
     res.json({ success: true, data: populatedOrder });
   } catch (error) {
@@ -223,8 +282,8 @@ export const updateStatus = async (req, res) => {
       timestamp: new Date()
     });
 
-    if (order.driverId && order.driverId.socketId) {
-      io.to(order.driverId.socketId).emit('booking:status-updated', {
+    if (order.driverId) {
+      io.to(`driver:${order.driverId}`).emit('booking:status-updated', {
         order: populatedOrder,
         previousStatus,
         newStatus: status,
@@ -240,7 +299,7 @@ export const updateStatus = async (req, res) => {
 
 export const cancelOrder = async (req, res) => {
   try {
-    const { reason } = req.body;
+    const reason = req.body.reason || req.body.cancelReason;
     const orderId = req.params.id;
 
     const order = await Order.findById(orderId);
