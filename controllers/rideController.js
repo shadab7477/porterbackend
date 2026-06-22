@@ -2630,8 +2630,6 @@ export const updateDriverLocationWithSocket = async (req, res) => {
         message: 'Driver not found'
       });
     }
-
-    // Emit location update through socket
     const locationData = {
       driverId,
       latitude,
