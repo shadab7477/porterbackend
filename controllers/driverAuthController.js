@@ -73,6 +73,12 @@ const checkDriverVerification = async (driverId) => {
 
 // ==================== PUBLIC ROUTES ====================
 
+const isDummyMobile = (num) => {
+  if (!num) return false;
+  const cleaned = String(num).replace(/\D/g, ''); // Keep only digits
+  return cleaned === '7477246478' || cleaned === '917477246478';
+};
+
 // Send OTP
 export const sendOTP = async (req, res) => {
   try {
@@ -85,31 +91,46 @@ export const sendOTP = async (req, res) => {
       });
     }
 
-    const phoneRegex = /^\d{10}$/;
-    if (!phoneRegex.test(phone)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid phone number format. Please provide 10 digit mobile number.'
-      });
+    const isDummy = isDummyMobile(phone);
+
+    if (!isDummy) {
+      const phoneRegex = /^\d{10}$/;
+      if (!phoneRegex.test(phone)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid phone number format. Please provide 10 digit mobile number.'
+        });
+      }
     }
 
-    await OTP.deleteMany({ mobile: phone });
+    const targetPhone = isDummy ? '7477246478' : phone;
 
-    const otp = generateOTP();
-    const otpRecord = new OTP({
-      mobile: phone,
-      otp: otp
-    });
-    await otpRecord.save();
+    await OTP.deleteMany({ mobile: targetPhone });
 
-    await sendSmsOtp(phone, otp);
+    let otp;
+    if (isDummy) {
+      otp = '123456';
+      const otpRecord = new OTP({
+        mobile: targetPhone,
+        otp: otp
+      });
+      await otpRecord.save();
+    } else {
+      otp = generateOTP();
+      const otpRecord = new OTP({
+        mobile: targetPhone,
+        otp: otp
+      });
+      await otpRecord.save();
+      await sendSmsOtp(targetPhone, otp);
+    }
 
     res.status(200).json({
       success: true,
       message: 'OTP sent successfully',
       data: {
-        phone,
-        otp: process.env.NODE_ENV === 'development' ? otp : undefined
+        phone: targetPhone,
+        otp: (process.env.NODE_ENV === 'development' || isDummy) ? otp : undefined
       }
     });
   } catch (error) {
@@ -122,7 +143,6 @@ export const sendOTP = async (req, res) => {
 };
 
 // Verify OTP and generate token
-// Verify OTP and generate token
 export const verifyOTP = async (req, res) => {
   try {
     const { phone, otp } = req.body;
@@ -134,38 +154,60 @@ export const verifyOTP = async (req, res) => {
       });
     }
 
-    const otpRecord = await OTP.findOne({ mobile: phone });
+    const isDummy = isDummyMobile(phone) && otp === '123456';
+    const targetPhone = isDummy ? '7477246478' : phone;
 
-    if (!otpRecord) {
-      return res.status(400).json({
-        success: false,
-        message: 'OTP expired. Please request a new OTP.'
-      });
-    }
+    let otpRecord;
 
-    if (otpRecord.attempts >= 3) {
-      await OTP.deleteOne({ _id: otpRecord._id });
-      return res.status(400).json({
-        success: false,
-        message: 'Too many failed attempts. Please request a new OTP.'
-      });
-    }
+    if (!isDummy) {
+      otpRecord = await OTP.findOne({ mobile: targetPhone });
 
-    if (otpRecord.otp !== otp) {
-      otpRecord.attempts += 1;
+      if (!otpRecord) {
+        return res.status(400).json({
+          success: false,
+          message: 'OTP expired. Please request a new OTP.'
+        });
+      }
+
+      if (otpRecord.attempts >= 3) {
+        await OTP.deleteOne({ _id: otpRecord._id });
+        return res.status(400).json({
+          success: false,
+          message: 'Too many failed attempts. Please request a new OTP.'
+        });
+      }
+
+      if (otpRecord.otp !== otp) {
+        otpRecord.attempts += 1;
+        await otpRecord.save();
+        return res.status(400).json({
+          success: false,
+          message: `Invalid OTP. ${3 - otpRecord.attempts} attempts remaining.`
+        });
+      }
+
+      // Mark as verified
+      otpRecord.isVerified = true;
       await otpRecord.save();
-      return res.status(400).json({
-        success: false,
-        message: `Invalid OTP. ${3 - otpRecord.attempts} attempts remaining.`
-      });
     }
-
-    // Mark as verified
-    otpRecord.isVerified = true;
-    await otpRecord.save();
 
     // Check if driver has an application
-    const existingApplication = await DriverApplication.findOne({ phone });
+    let existingApplication = await DriverApplication.findOne({ phone: targetPhone });
+
+    if (!existingApplication && isDummy) {
+      existingApplication = new DriverApplication({
+        driverId: 'DRV-DUMMY-7477',
+        phone: targetPhone,
+        fullName: 'PlayStore Tester',
+        email: 'tester@playstore.com',
+        verificationStatus: 'verified',
+        vehicleType: 'Bike',
+        vehicleNumber: 'TS-09-DUMMY',
+        reviewedAt: new Date()
+      });
+      await existingApplication.save();
+    }
+
     let driverToken = null;
     let isExistingDriver = false;
     let isVerified = false;
@@ -187,7 +229,7 @@ export const verifyOTP = async (req, res) => {
           statusMessage = 'Driver verified. Login successful.';
           
           // Get or create driver entry
-          let driver = await Driver.findOne({ phone });
+          let driver = await Driver.findOne({ phone: targetPhone });
           if (!driver) {
             driver = new Driver({
               driverId: existingApplication.driverId,
@@ -204,7 +246,7 @@ export const verifyOTP = async (req, res) => {
           }
           
           driverId = driver._id;
-          driverToken = generateDriverToken(driver._id, phone, true);
+          driverToken = generateDriverToken(driver._id, targetPhone, true);
           break;
           
         case 'submitted':
@@ -217,7 +259,7 @@ export const verifyOTP = async (req, res) => {
           // Generate token for checking status (short-lived)
           driverToken = jwt.sign(
             { 
-              phone, 
+              phone: targetPhone, 
               type: 'driver_auth',
               role: 'driver',
               isVerified: false,
@@ -238,7 +280,7 @@ export const verifyOTP = async (req, res) => {
           // Generate registration token
           driverToken = jwt.sign(
             { 
-              phone, 
+              phone: targetPhone, 
               type: 'driver_auth',
               role: 'driver',
               isVerified: false,
@@ -258,7 +300,7 @@ export const verifyOTP = async (req, res) => {
           // Generate token for checking status
           driverToken = jwt.sign(
             { 
-              phone, 
+              phone: targetPhone, 
               type: 'driver_auth',
               role: 'driver',
               isVerified: false,
@@ -278,7 +320,7 @@ export const verifyOTP = async (req, res) => {
           
           driverToken = jwt.sign(
             { 
-              phone, 
+              phone: targetPhone, 
               type: 'driver_auth',
               role: 'driver',
               isVerified: false,
@@ -299,7 +341,7 @@ export const verifyOTP = async (req, res) => {
       // Generate registration token
       driverToken = jwt.sign(
         { 
-          phone, 
+          phone: targetPhone, 
           type: 'driver_auth',
           role: 'driver',
           isVerified: false,
@@ -311,12 +353,16 @@ export const verifyOTP = async (req, res) => {
     }
 
     // Delete OTP after successful verification
-    await OTP.deleteOne({ _id: otpRecord._id });
+    if (otpRecord) {
+      await OTP.deleteOne({ _id: otpRecord._id });
+    } else if (isDummy) {
+      await OTP.deleteOne({ mobile: targetPhone });
+    }
 
     // Prepare response data
     const responseData = {
       token: driverToken,
-      phone,
+      phone: targetPhone,
       isExistingDriver,
       isVerified,
       requiresRegistration,
@@ -376,10 +422,27 @@ export const driverLogin = async (req, res) => {
       });
     }
 
-    const application = await DriverApplication.findOne({ 
-      phone,
+    const isDummy = isDummyMobile(phone);
+    const targetPhone = isDummy ? '7477246478' : phone;
+
+    let application = await DriverApplication.findOne({ 
+      phone: targetPhone,
       verificationStatus: 'verified'
     });
+
+    if (!application && isDummy) {
+      application = new DriverApplication({
+        driverId: 'DRV-DUMMY-7477',
+        phone: targetPhone,
+        fullName: 'PlayStore Tester',
+        email: 'tester@playstore.com',
+        verificationStatus: 'verified',
+        vehicleType: 'Bike',
+        vehicleNumber: 'TS-09-DUMMY',
+        reviewedAt: new Date()
+      });
+      await application.save();
+    }
 
     if (!application) {
       return res.status(401).json({
@@ -388,7 +451,7 @@ export const driverLogin = async (req, res) => {
       });
     }
 
-    let driver = await Driver.findOne({ phone }).populate('applicationId');
+    let driver = await Driver.findOne({ phone: targetPhone }).populate('applicationId');
 
     if (!driver) {
       driver = new Driver({
@@ -408,7 +471,7 @@ export const driverLogin = async (req, res) => {
       await driver.save();
     }
 
-    const driverToken = generateDriverToken(driver._id, phone, true);
+    const driverToken = generateDriverToken(driver._id, targetPhone, true);
 
     res.status(200).json({
       success: true,

@@ -138,12 +138,45 @@ export const initializeRideTrackingSockets = (io) => {
 
         logWithTimestamp('info', `🚗 Driver ${driverId} joined tracking for ride ${rideId}`);
 
+        // Fetch ride details to return in tracking:joined
+        const ride = await Ride.findOne({ rideId: rideId })
+          .populate('driver.driverId', 'name phone email profileImage vehicleType vehicleNumber rating')
+          .populate('customer.customerId', 'name phone email profileImage');
+
         // Send confirmation to driver
         const confirmationData = {
           success: true,
           rideId,
           userType: 'driver',
           message: 'Successfully joined ride tracking',
+          rideDetails: ride ? {
+            rideId: ride.rideId,
+            pickupLocation: ride.pickupLocation,
+            dropLocation: ride.dropLocation,
+            dropLocations: ride.dropLocations || [],
+            status: ride.status,
+            fare: ride.fare,
+            distance: ride.distance,
+            distanceText: ride.routeInfo?.distanceText || `${ride.distance} km`,
+            duration: ride.duration,
+            durationText: ride.routeInfo?.durationText || `${ride.duration} mins`,
+            driver: ride.driver ? {
+              id: ride.driver.driverId?._id,
+              name: ride.driver.driverId?.name || ride.driver.name,
+              phone: ride.driver.driverId?.phone || ride.driver.phone,
+              profileImage: ride.driver.driverId?.profileImage,
+              vehicleType: ride.driver.driverId?.vehicleType || ride.driver.vehicleType,
+              vehicleNumber: ride.driver.driverId?.vehicleNumber || ride.driver.vehicleNumber,
+              rating: ride.driver.driverId?.rating || ride.driver.rating || 0
+            } : null,
+            customer: ride.customer ? {
+              id: ride.customer.customerId?._id,
+              name: ride.customer.customerId?.name || ride.customer.name,
+              phone: ride.customer.customerId?.phone || ride.customer.phone,
+              profileImage: ride.customer.customerId?.profileImage,
+              rating: ride.customer.customerId?.rating || ride.customer.rating || 0
+            } : null
+          } : null,
           timestamp: new Date(),
           socketId: socket.id
         };
@@ -279,20 +312,29 @@ export const initializeRideTrackingSockets = (io) => {
             rideId: ride.rideId,
             pickupLocation: ride.pickupLocation,
             dropLocation: ride.dropLocation,
+            dropLocations: ride.dropLocations || [],
             status: ride.status,
             fare: ride.fare,
-            estimatedDistance: ride.estimatedDistance,
-            estimatedDuration: ride.estimatedDuration,
+            distance: ride.distance,
+            distanceText: ride.routeInfo?.distanceText || `${ride.distance} km`,
+            duration: ride.duration,
+            durationText: ride.routeInfo?.durationText || `${ride.duration} mins`,
             driver: ride.driver ? {
               id: ride.driver.driverId?._id,
-              name: ride.driver.driverId?.name,
-              phone: ride.driver.driverId?.phone,
+              name: ride.driver.driverId?.name || ride.driver.name,
+              phone: ride.driver.driverId?.phone || ride.driver.phone,
               profileImage: ride.driver.driverId?.profileImage,
-              vehicleType: ride.driver.driverId?.vehicleType,
-              vehicleNumber: ride.driver.driverId?.vehicleNumber,
-              rating: ride.driver.driverId?.rating
+              vehicleType: ride.driver.driverId?.vehicleType || ride.driver.vehicleType,
+              vehicleNumber: ride.driver.driverId?.vehicleNumber || ride.driver.vehicleNumber,
+              rating: ride.driver.driverId?.rating || ride.driver.rating || 0
             } : null,
-            customer: ride.customer
+            customer: ride.customer ? {
+              id: ride.customer.customerId?._id,
+              name: ride.customer.customerId?.name || ride.customer.name,
+              phone: ride.customer.customerId?.phone || ride.customer.phone,
+              profileImage: ride.customer.customerId?.profileImage,
+              rating: ride.customer.customerId?.rating || ride.customer.rating || 0
+            } : null
           },
           timestamp: new Date()
         };

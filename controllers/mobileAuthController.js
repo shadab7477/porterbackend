@@ -6,28 +6,45 @@ import { sendNotification } from '../utils/notificationService.js';
 const MAX_OTP_ATTEMPTS = 3;
 const OTP_EXPIRY_MINUTES = 15;
 
+const isDummyMobile = (num) => {
+  if (!num) return false;
+  const cleaned = String(num).replace(/\D/g, ''); // Keep only digits
+  return cleaned === '7477246478' || cleaned === '917477246478';
+};
+
 export const sendOtp = async (req, res) => {
   try {
     const { mobile } = req.body;
     console.log(req.body);
 
-
-
     // Delete any existing OTP for this mobile
     await OTP.deleteOne({ mobile });
 
-    // Generate new OTP
-    const otp = generateOTP();
+    let otp;
+    let smsResult = { success: true };
 
-    // Save OTP to database
-    await OTP.create({
-      mobile,
-      otp,
-      attempts: 0
-    });
+    if (isDummyMobile(mobile)) {
+      otp = '123456';
+      // Save OTP to database
+      await OTP.create({
+        mobile,
+        otp,
+        attempts: 0
+      });
+    } else {
+      // Generate new OTP
+      otp = generateOTP();
 
-    // Send OTP via SMS
-    const smsResult = await sendSmsOtp(mobile, otp);
+      // Save OTP to database
+      await OTP.create({
+        mobile,
+        otp,
+        attempts: 0
+      });
+
+      // Send OTP via SMS
+      smsResult = await sendSmsOtp(mobile, otp);
+    }
 
     if (!smsResult.success) {
       return res.status(500).json({
@@ -65,54 +82,75 @@ export const verifyOtp = async (req, res) => {
       });
     }
 
-    // Find OTP record
-    const otpRecord = await OTP.findOne({ mobile });
+    const isDummy = isDummyMobile(mobile) && otp === '123456';
+    let otpRecord;
 
-    if (!otpRecord) {
-      return res.status(400).json({
-        success: false,
-        message: 'OTP expired or not found. Please request new OTP'
-      });
-    }
+    if (!isDummy) {
+      // Find OTP record
+      otpRecord = await OTP.findOne({ mobile });
 
-    // Max attempts check
-    if (otpRecord.attempts >= MAX_OTP_ATTEMPTS) {
-      await OTP.deleteOne({ mobile });
-      return res.status(400).json({
-        success: false,
-        message: 'Maximum attempts exceeded. Please request new OTP'
-      });
-    }
+      if (!otpRecord) {
+        return res.status(400).json({
+          success: false,
+          message: 'OTP expired or not found. Please request new OTP'
+        });
+      }
 
-    // Verify OTP
-    if (otpRecord.otp !== otp) {
-      otpRecord.attempts += 1;
+      // Max attempts check
+      if (otpRecord.attempts >= MAX_OTP_ATTEMPTS) {
+        await OTP.deleteOne({ mobile });
+        return res.status(400).json({
+          success: false,
+          message: 'Maximum attempts exceeded. Please request new OTP'
+        });
+      }
+
+      // Verify OTP
+      if (otpRecord.otp !== otp) {
+        otpRecord.attempts += 1;
+        await otpRecord.save();
+
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid OTP',
+          data: {
+            attemptsRemaining: MAX_OTP_ATTEMPTS - otpRecord.attempts
+          }
+        });
+      }
+
+      // ✅ OTP verified
+      otpRecord.isVerified = true;
       await otpRecord.save();
-
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid OTP',
-        data: {
-          attemptsRemaining: MAX_OTP_ATTEMPTS - otpRecord.attempts
-        }
-      });
     }
-
-    // ✅ OTP verified
-    otpRecord.isVerified = true;
-    await otpRecord.save();
 
     // Find or create customer
     let customer = await Customer.findOne({ phone: mobile });
-    const isNewCustomer = !customer;
+    let isNewCustomer = !customer;
 
     if (!customer) {
-      customer = new Customer({
-        phone: mobile,
-        isVerified: true
-      });
+      if (isDummy) {
+        customer = new Customer({
+          phone: mobile,
+          name: 'PlayStore Tester',
+          email: 'tester@playstore.com',
+          isVerified: true
+        });
+        await customer.save();
+        isNewCustomer = false;
+      } else {
+        customer = new Customer({
+          phone: mobile,
+          isVerified: true
+        });
+      }
     } else {
       customer.isVerified = true;
+      if (isDummy && !customer.name) {
+        customer.name = 'PlayStore Tester';
+        customer.email = 'tester@playstore.com';
+        await customer.save();
+      }
     }
 
     // ✅ Save / Update FCM Token
@@ -167,16 +205,28 @@ export const resendOtp = async (req, res) => {
     // Delete existing OTP
     await OTP.deleteOne({ mobile });
 
-    // Generate and send new OTP
-    const otp = generateOTP();
+    let otp;
+    let smsResult = { success: true };
 
-    await OTP.create({
-      mobile,
-      otp,
-      attempts: 0
-    });
+    if (isDummyMobile(mobile)) {
+      otp = '123456';
+      await OTP.create({
+        mobile,
+        otp,
+        attempts: 0
+      });
+    } else {
+      // Generate and send new OTP
+      otp = generateOTP();
 
-    const smsResult = await sendSmsOtp(mobile, otp);
+      await OTP.create({
+        mobile,
+        otp,
+        attempts: 0
+      });
+
+      smsResult = await sendSmsOtp(mobile, otp);
+    }
 
     if (!smsResult.success) {
       return res.status(500).json({
