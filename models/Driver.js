@@ -105,6 +105,21 @@ const driverSchema = new mongoose.Schema({
   updatedAt: {
     type: Date,
     default: Date.now
+  },
+  subscription: {
+    status: {
+      type: String,
+      enum: ['active', 'pending', 'expired'],
+      default: 'active'
+    },
+    amount: {
+      type: Number,
+      default: 0
+    },
+    validUntil: {
+      type: Date,
+      default: null
+    }
   }
 });
 

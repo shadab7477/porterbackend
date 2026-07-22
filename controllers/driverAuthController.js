@@ -231,16 +231,25 @@ export const verifyOTP = async (req, res) => {
           // Get or create driver entry
           let driver = await Driver.findOne({ phone: targetPhone });
           if (!driver) {
+            const vType = existingApplication.vehicleType?.toLowerCase() || '';
+            const isTwoWheeler = vType === 'bike' || vType === 'scooter';
+            const hasHired = existingApplication.hiredDriver?.hasHiredDriver;
+            
             driver = new Driver({
               driverId: existingApplication.driverId,
-              name: existingApplication.fullName,
+              name: hasHired ? `${existingApplication.hiredDriver.name} (Captain: ${existingApplication.fullName})` : existingApplication.fullName,
               phone: existingApplication.phone,
               email: existingApplication.email,
               applicationId: existingApplication._id,
               vehicleType: existingApplication.vehicleType,
               vehicleNumber: existingApplication.vehicleNumber,
               isOnline: false,
-              lastActive: new Date()
+              lastActive: new Date(),
+              subscription: {
+                status: isTwoWheeler ? 'pending' : 'active',
+                amount: isTwoWheeler ? 499 : 0,
+                validUntil: null
+              }
             });
             await driver.save();
           }
@@ -454,16 +463,25 @@ export const driverLogin = async (req, res) => {
     let driver = await Driver.findOne({ phone: targetPhone }).populate('applicationId');
 
     if (!driver) {
+      const vType = application.vehicleType?.toLowerCase() || '';
+      const isTwoWheeler = vType === 'bike' || vType === 'scooter';
+      const hasHired = application.hiredDriver?.hasHiredDriver;
+      
       driver = new Driver({
         driverId: application.driverId,
-        name: application.fullName,
+        name: hasHired ? `${application.hiredDriver.name} (Captain: ${application.fullName})` : application.fullName,
         phone: application.phone,
         email: application.email,
         applicationId: application._id,
         vehicleType: application.vehicleType,
         vehicleNumber: application.vehicleNumber,
         isOnline: false,
-        lastActive: new Date()
+        lastActive: new Date(),
+        subscription: {
+          status: isTwoWheeler ? 'pending' : 'active',
+          amount: isTwoWheeler ? 499 : 0,
+          validUntil: null
+        }
       });
       await driver.save();
     } else {
@@ -872,16 +890,25 @@ export const completeRegistration = async (req, res) => {
       if (application.verificationStatus === 'verified') {
         let verifiedDriver = await Driver.findOne({ phone }).populate('applicationId');
         if (!verifiedDriver) {
+          const vType = application.vehicleType?.toLowerCase() || '';
+          const isTwoWheeler = vType === 'bike' || vType === 'scooter';
+          const hasHired = application.hiredDriver?.hasHiredDriver;
+
           verifiedDriver = new Driver({
             driverId: application.driverId,
-            name: application.fullName,
+            name: hasHired ? `${application.hiredDriver.name} (Captain: ${application.fullName})` : application.fullName,
             phone: application.phone,
             email: application.email,
             applicationId: application._id,
             vehicleType: application.vehicleType,
             vehicleNumber: application.vehicleNumber,
             isOnline: false,
-            lastActive: new Date()
+            lastActive: new Date(),
+            subscription: {
+              status: isTwoWheeler ? 'pending' : 'active',
+              amount: isTwoWheeler ? 499 : 0,
+              validUntil: null
+            }
           });
           await verifiedDriver.save();
         } else {
@@ -1027,6 +1054,7 @@ export const getDriverProfile = async (req, res) => {
         rating: driver.rating,
         walletBalance: driver.walletBalance
       },
+      subscription: driver.subscription,
       applicationDetails: application ? {
         dateOfBirth: application.dateOfBirth,
         address: application.address,
@@ -1124,15 +1152,24 @@ export const verifyDocument = async (req, res) => {
       let driver = await Driver.findOne({ phone: application.phone });
       
       if (!driver) {
+        const vType = application.vehicleType?.toLowerCase() || '';
+        const isTwoWheeler = vType === 'bike' || vType === 'scooter';
+        const hasHired = application.hiredDriver?.hasHiredDriver;
+
         driver = new Driver({
           driverId: application.driverId,
-          name: application.fullName,
+          name: hasHired ? `${application.hiredDriver.name} (Captain: ${application.fullName})` : application.fullName,
           phone: application.phone,
           email: application.email,
           applicationId: application._id,
           vehicleType: application.vehicleType,
           vehicleNumber: application.vehicleNumber,
-          isOnline: false
+          isOnline: false,
+          subscription: {
+            status: isTwoWheeler ? 'pending' : 'active',
+            amount: isTwoWheeler ? 499 : 0,
+            validUntil: null
+          }
         });
         await driver.save();
       }
