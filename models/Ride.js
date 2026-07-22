@@ -283,45 +283,37 @@ rideSchema.methods.updateStatus = function (status) {
 
 // Static method to calculate fare — new pricing logic with baseFare, perKmAdd, and pricePerKm
 rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car', isMerchant = false) {
-  let baseFare = 360;
-  let perKmAdd = 30;
-  let ratePerKm = 90;
+  let baseFare = 0;
+  let ratePerKm = 15;
 
   try {
     const Vehicle = mongoose.model('Vehicle');
     const vehicle = await Vehicle.findOne({ vehicleType: vehicleType.toLowerCase() });
     if (vehicle && vehicle.isActive) {
       baseFare = vehicle.baseFare || baseFare;
-      perKmAdd = vehicle.perKmAdd || perKmAdd;
       ratePerKm = vehicle.pricePerKm || ratePerKm;
     } else {
       // Fallback hardcoded rates for existing app compatibility
       const vType = vehicleType.toLowerCase();
       if (['bike', 'scooty', 'scooter'].includes(vType)) {
-        baseFare = vType === 'bike' ? 25 : 35;
-        perKmAdd = vType === 'bike' ? 10 : 12.5;
+        baseFare = vType === 'bike' ? 0 : 0;
         ratePerKm = vType === 'bike' ? 15 : 20;
       } else if (['auto', 'mini_3w', '3 wheeler', '3_wheeler'].includes(vType)) {
-        if (vType === 'mini_3w') { baseFare = 120; perKmAdd = 12.5; ratePerKm = 35; }
-        else { baseFare = 250; perKmAdd = 32.5; ratePerKm = 60; }
+        if (vType === 'mini_3w') { baseFare = 120; ratePerKm = 35; }
+        else { baseFare = 250; ratePerKm = 60; }
       } else if (vType === 'e_loader') {
-        baseFare = 175; perKmAdd = 17.5; ratePerKm = 45;
+        baseFare = 175; ratePerKm = 45;
       } else {
-        baseFare = 360; perKmAdd = 30; ratePerKm = 90; // Default (Tata Ace, Car, etc)
+        baseFare = 360; ratePerKm = 90; // Default (Tata Ace, Car, etc)
       }
     }
   } catch (err) {
-    console.error('Error fetching dynamic vehicle pricing:', err);
+    console.error('Error fetching vehicle pricing:', err);
   }
 
-  let totalFare = 0;
-  if (distance <= 5) {
-    totalFare = baseFare + (distance * perKmAdd);
-  } else {
-    totalFare = distance * ratePerKm;
-  }
-
+  let totalFare = baseFare + (distance * ratePerKm);
   let subtotal = totalFare;
+  
   let discountPercentage = 0;
   let discountAmount = 0;
   
@@ -357,8 +349,7 @@ rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car'
     merchantDiscount: isMerchant ? MERCHANT_CASHBACK_PERCENT : 0,
     breakdown: {
       baseFare:    `₹${baseFare}`,
-      perKmAdd:    `₹${perKmAdd}/km (if <= 5km)`,
-      ratePerKm:   `₹${ratePerKm}/km (if > 5km)`,
+      ratePerKm:   `₹${ratePerKm}/km`,
       distance:    `${distance.toFixed(1)} km`,
       subtotal:    `₹${Math.round(subtotal)}`,
       discount:    discountPercentage > 0 ? `₹${Math.round(discountAmount)} (${discountPercentage}% off for >10km)` : '₹0',

@@ -62,7 +62,6 @@ export const createVehicle = async (req, res) => {
       name,
       baseFare,
       pricePerKm,
-      perKmAdd,          // NEW
       subscriptionFee,   // NEW
       capacity,
       weight,
@@ -80,7 +79,6 @@ export const createVehicle = async (req, res) => {
       name,
       baseFare,
       pricePerKm,
-      perKmAdd: perKmAdd !== undefined ? Number(perKmAdd) : 0,
       subscriptionFee: subscriptionFee !== undefined ? Number(subscriptionFee) : 0, // NEW
       capacity,
       weight,
@@ -106,10 +104,6 @@ export const updateVehicle = async (req, res) => {
     // Convert subscriptionFee to number if present (NEW)
     if (updateData.subscriptionFee !== undefined) {
       updateData.subscriptionFee = Number(updateData.subscriptionFee);
-    }
-    // Convert perKmAdd to number if present
-    if (updateData.perKmAdd !== undefined) {
-      updateData.perKmAdd = Number(updateData.perKmAdd);
     }
     
     const vehicle = await Vehicle.findByIdAndUpdate(
@@ -162,16 +156,12 @@ export const calculateFare = async (req, res) => {
     }
     
     const distanceInKm = parseFloat(distance);
-    let total = 0;
-    if (distanceInKm <= 5) {
-      total = vehicle.baseFare + (distanceInKm * vehicle.perKmAdd);
-    } else {
-      total = distanceInKm * vehicle.pricePerKm;
-    }
+    let total = vehicle.baseFare + (distanceInKm * vehicle.pricePerKm);
     
     let subtotal = total;
     let discountPercentage = 0;
     let discountAmount = 0;
+    
     if (distanceInKm > 10) {
       const vType = vehicle.vehicleType.toLowerCase();
       if (['bike', 'scooty', 'scooter'].includes(vType)) {
@@ -192,7 +182,6 @@ export const calculateFare = async (req, res) => {
         breakdown: {
           distance: distanceInKm,
           baseFare: vehicle.baseFare,
-          perKmAdd: vehicle.perKmAdd,
           pricePerKm: vehicle.pricePerKm,
           subtotal: Math.round(subtotal * 100) / 100,
           discountAmount: Math.round(discountAmount * 100) / 100,
