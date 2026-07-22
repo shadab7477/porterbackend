@@ -62,6 +62,7 @@ export const createVehicle = async (req, res) => {
       name,
       baseFare,
       pricePerKm,
+      perKmAdd,          // NEW
       subscriptionFee,   // NEW
       capacity,
       weight,
@@ -79,6 +80,7 @@ export const createVehicle = async (req, res) => {
       name,
       baseFare,
       pricePerKm,
+      perKmAdd: perKmAdd !== undefined ? Number(perKmAdd) : 0,
       subscriptionFee: subscriptionFee !== undefined ? Number(subscriptionFee) : 0, // NEW
       capacity,
       weight,
@@ -104,6 +106,10 @@ export const updateVehicle = async (req, res) => {
     // Convert subscriptionFee to number if present (NEW)
     if (updateData.subscriptionFee !== undefined) {
       updateData.subscriptionFee = Number(updateData.subscriptionFee);
+    }
+    // Convert perKmAdd to number if present
+    if (updateData.perKmAdd !== undefined) {
+      updateData.perKmAdd = Number(updateData.perKmAdd);
     }
     
     const vehicle = await Vehicle.findByIdAndUpdate(
@@ -156,7 +162,26 @@ export const calculateFare = async (req, res) => {
     }
     
     const distanceInKm = parseFloat(distance);
-    const total = distanceInKm * vehicle.pricePerKm;
+    let total = 0;
+    if (distanceInKm <= 5) {
+      total = vehicle.baseFare + (distanceInKm * vehicle.perKmAdd);
+    } else {
+      total = distanceInKm * vehicle.pricePerKm;
+    }
+    
+    let subtotal = total;
+    let discountPercentage = 0;
+    let discountAmount = 0;
+    if (distanceInKm > 10) {
+      const vType = vehicle.vehicleType.toLowerCase();
+      if (['bike', 'scooty', 'scooter'].includes(vType)) {
+        discountPercentage = 12;
+      } else {
+        discountPercentage = 15;
+      }
+      discountAmount = total * (discountPercentage / 100);
+      total -= discountAmount;
+    }
     
     res.json({
       success: true,
@@ -166,7 +191,12 @@ export const calculateFare = async (req, res) => {
         subscriptionFee: vehicle.subscriptionFee,   // NEW (optional)
         breakdown: {
           distance: distanceInKm,
+          baseFare: vehicle.baseFare,
+          perKmAdd: vehicle.perKmAdd,
           pricePerKm: vehicle.pricePerKm,
+          subtotal: Math.round(subtotal * 100) / 100,
+          discountAmount: Math.round(discountAmount * 100) / 100,
+          discountPercentage,
           distanceCharge: Math.round(total * 100) / 100
         },
         total: Math.round(total * 100) / 100

@@ -27,6 +27,12 @@ const vehicleSchema = new mongoose.Schema({
     required: [true, 'Price per km is required'],
     min: 0
   },
+  perKmAdd: {                      // NEW FIELD
+    type: Number,
+    required: true,
+    min: 0,
+    default: 0                     // default for existing docs
+  },
   subscriptionFee: {               // NEW FIELD
     type: Number,
     required: true,
