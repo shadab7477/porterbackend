@@ -579,7 +579,8 @@ export const requestRide = async (req, res) => {
       paymentCollectedBy = 'customer',  // 'customer' | 'receiver'
       receiver,
       distance: reqDistance,
-      duration: reqDuration
+      duration: reqDuration,
+      amount: reqAmount
     } = req.body;
 
 
@@ -661,9 +662,24 @@ export const requestRide = async (req, res) => {
       totalDuration = routeInfo.duration;
     }
 
-    // Calculate fare based on total cumulative distance (merchant gets 5% discount)
+    // Use fare amount from frontend if provided, otherwise calculate it
     const isMerchant = customer.isMerchant || false;
-    const fare = await Ride.calculateFare(totalDistance, vehicleType, isMerchant);
+    let fare;
+    
+    if (reqAmount) {
+      const parsedAmount = parseFloat(reqAmount.toString().replace(/[^0-9.]/g, '')) || 0;
+      fare = {
+        distanceFare: parsedAmount,
+        total: parsedAmount,
+        discount: 0,
+        cashbackAmount: 0,
+        finalAmount: parsedAmount,
+        isMerchantRide: isMerchant,
+        merchantDiscount: isMerchant ? 5 : 0 // You can adjust this if frontend handles merchant logic
+      };
+    } else {
+      fare = await Ride.calculateFare(totalDistance, vehicleType, isMerchant);
+    }
 
 
     // The final/last drop location for backward compatibility
