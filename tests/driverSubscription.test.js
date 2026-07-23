@@ -69,7 +69,7 @@ jest.unstable_mockModule('../models/Vehicle.js', () => ({
     findOne: jest.fn(() => ({
       vehicleType: 'bike',
       name: 'Bike',
-      subscriptionFee: 100
+      mainPricePerKm: 100
     }))
   }
 }));
@@ -124,7 +124,7 @@ beforeEach(() => {
   Vehicle.findOne.mockResolvedValue({
     vehicleType: 'bike',
     name: 'Bike',
-    subscriptionFee: 100
+    mainPricePerKm: 100
   });
   initialApplication.subscriptionPayment = {
     status: 'pending',

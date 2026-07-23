@@ -27,7 +27,7 @@ const vehiclePricingSchema = new mongoose.Schema(
       required: true,
       min: 0,
     },
-    subscriptionFee: {
+    mainPricePerKm: {
       type: Number,
       required: true,
       min: 0,

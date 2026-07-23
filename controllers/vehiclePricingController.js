@@ -38,11 +38,11 @@ export const getAllVehiclePricing = async (req, res) => {
 
 export const createVehiclePricing = async (req, res) => {
   try {
-    const { category, type, displayName, ratePerKm, subscriptionFee, isActive } = req.body;
+    const { category, type, displayName, ratePerKm, mainPricePerKm, isActive } = req.body;
 
     // Required fields check
-    if (!category || !type || !displayName || ratePerKm === undefined || subscriptionFee === undefined) {
-      return res.status(400).json({ success: false, message: 'Missing required fields: category, type, displayName, ratePerKm, subscriptionFee' });
+    if (!category || !type || !displayName || ratePerKm === undefined || mainPricePerKm === undefined) {
+      return res.status(400).json({ success: false, message: 'Missing required fields: category, type, displayName, ratePerKm, mainPricePerKm' });
     }
 
     // Check unique type
@@ -69,7 +69,7 @@ export const createVehiclePricing = async (req, res) => {
       type: type.toLowerCase(),
       displayName,
       ratePerKm: Number(ratePerKm),
-      subscriptionFee: Number(subscriptionFee),
+      mainPricePerKm: Number(mainPricePerKm),
       image: imageUpload,
       isActive: isActive !== undefined ? isActive === 'true' || isActive === true : true,
     });
@@ -86,7 +86,7 @@ export const createVehiclePricing = async (req, res) => {
 export const updateVehiclePricing = async (req, res) => {
   try {
     const { id } = req.params;
-    const { category, type, displayName, ratePerKm, subscriptionFee, isActive } = req.body;
+    const { category, type, displayName, ratePerKm, mainPricePerKm, isActive } = req.body;
 
     const vehicle = await VehiclePricing.findById(id);
     if (!vehicle) {
@@ -106,7 +106,7 @@ export const updateVehiclePricing = async (req, res) => {
     if (category) vehicle.category = category;
     if (displayName) vehicle.displayName = displayName;
     if (ratePerKm !== undefined) vehicle.ratePerKm = Number(ratePerKm);
-    if (subscriptionFee !== undefined) vehicle.subscriptionFee = Number(subscriptionFee);
+    if (mainPricePerKm !== undefined) vehicle.mainPricePerKm = Number(mainPricePerKm);
     if (isActive !== undefined) vehicle.isActive = isActive === 'true' || isActive === true;
 
     // Optional image update

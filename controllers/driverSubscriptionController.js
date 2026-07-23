@@ -51,7 +51,7 @@ const resolveDriverApplication = async (id, phone) => {
 
 // ─── GET SUBSCRIPTION FEE ────────────────────────────────────────────────────
 // GET /api/driver/subscription/fee?vehicleType=bike
-export const getSubscriptionFee = async (req, res) => {
+export const getMainPricePerKm = async (req, res) => {
   try {
     const { vehicleType } = req.query;
 
@@ -76,11 +76,11 @@ export const getSubscriptionFee = async (req, res) => {
       data: {
         vehicleType: vehicle.vehicleType,
         vehicleName: vehicle.name,
-        subscriptionFee: vehicle.subscriptionFee ?? 0,
+        mainPricePerKm: vehicle.mainPricePerKm ?? 0,
       }
     });
   } catch (error) {
-    console.error('getSubscriptionFee error:', error);
+    console.error('getMainPricePerKm error:', error);
     res.status(500).json({ success: false, message: 'Failed to get subscription fee' });
   }
 };
@@ -115,7 +115,7 @@ export const createSubscriptionOrder = async (req, res) => {
         alreadyPaid: true,
         message: 'Subscription fee already paid',
         data: {
-          subscriptionFee: application.subscriptionPayment.amount,
+          mainPricePerKm: application.subscriptionPayment.amount,
           paidAt: application.subscriptionPayment.paidAt,
         }
       });
@@ -131,9 +131,9 @@ export const createSubscriptionOrder = async (req, res) => {
       vehicleType: { $regex: new RegExp(`^${vehicleType}$`, 'i') }
     });
 
-    const subscriptionFee = vehicle?.subscriptionFee ?? 0;
+    const mainPricePerKm = vehicle?.mainPricePerKm ?? 0;
 
-    if (subscriptionFee <= 0) {
+    if (mainPricePerKm <= 0) {
       // No fee required — mark as completed immediately
       application.subscriptionPayment = {
         status: 'completed',
@@ -150,13 +150,13 @@ export const createSubscriptionOrder = async (req, res) => {
         message: 'No subscription fee required for this vehicle type',
         data: {
           applicationId: application._id,
-          subscriptionFee: 0
+          mainPricePerKm: 0
         }
       });
     }
 
     // Create Razorpay order
-    const amountInPaise = Math.round(subscriptionFee * 100);
+    const amountInPaise = Math.round(mainPricePerKm * 100);
     const receipt = `sub_${application._id.toString().slice(-10)}_${Date.now().toString().slice(-6)}`;
 
     const order = await razorpay.orders.create({
@@ -173,13 +173,13 @@ export const createSubscriptionOrder = async (req, res) => {
       }
     });
 
-    console.log(`✅ Driver subscription order created: ${order.id} for ₹${subscriptionFee} (${application.phone})`);
+    console.log(`✅ Driver subscription order created: ${order.id} for ₹${mainPricePerKm} (${application.phone})`);
 
     // Store pending order on application
     application.subscriptionPayment = {
       status: 'pending',
       razorpayOrderId: order.id,
-      amount: subscriptionFee,
+      amount: mainPricePerKm,
       paidAt: null,
       razorpayPaymentId: null,
     };
@@ -190,7 +190,7 @@ export const createSubscriptionOrder = async (req, res) => {
       data: {
         orderId: order.id,
         amount: order.amount,           // paise
-        amountInRupees: subscriptionFee,
+        amountInRupees: mainPricePerKm,
         currency: order.currency,
         keyId: process.env.RAZORPAY_KEY_ID || 'rzp_live_ST0TZQUt1IwsqU',
         driverName: application.fullName,
@@ -263,7 +263,7 @@ export const verifySubscriptionPayment = async (req, res) => {
         applicationId: application._id,
         driverId: application.driverId,
         phone: application.phone,
-        subscriptionFee: application.subscriptionPayment.amount,
+        mainPricePerKm: application.subscriptionPayment.amount,
         paidAt: application.subscriptionPayment.paidAt,
         verificationStatus: application.verificationStatus,
       }

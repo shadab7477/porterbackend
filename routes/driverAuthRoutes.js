@@ -11,7 +11,7 @@ import {
   refreshToken
 } from '../controllers/driverAuthController.js';
 import {
-  getSubscriptionFee,
+  getMainPricePerKm,
   createSubscriptionOrder,
   verifySubscriptionPayment,
   getSubscriptionStatus
@@ -89,7 +89,7 @@ router.get('/stats', driverAuthMiddleware, getDriverStats);
 // POST /api/driver/subscription/verify                (driver auth)
 // GET  /api/driver/subscription/status/:applicationId (driver auth)
 
-router.get('/subscription/fee', getSubscriptionFee);
+router.get('/subscription/fee', getMainPricePerKm);
 router.post('/subscription/create-order', driverAuthMiddleware, createSubscriptionOrder);
 router.post('/subscription/verify', driverAuthMiddleware, verifySubscriptionPayment);
 router.get('/subscription/status/:applicationId?', driverAuthMiddleware, getSubscriptionStatus);

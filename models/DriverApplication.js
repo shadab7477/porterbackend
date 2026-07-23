@@ -228,7 +228,7 @@ const driverApplicationSchema = new mongoose.Schema(
       ref: 'Admin',
     },
 
-    // ── Subscription Fee Payment ──────────────────────────────────────────────
+    // ── Main Price Per KM Payment ──────────────────────────────────────────────
     subscriptionPayment: {
       type: subscriptionPaymentSchema,
       default: () => ({ status: 'pending' })

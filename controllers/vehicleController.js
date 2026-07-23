@@ -62,7 +62,7 @@ export const createVehicle = async (req, res) => {
       name,
       baseFare,
       pricePerKm,
-      subscriptionFee,   // NEW
+      mainPricePerKm,   // NEW
       capacity,
       weight,
       description
@@ -79,7 +79,7 @@ export const createVehicle = async (req, res) => {
       name,
       baseFare,
       pricePerKm,
-      subscriptionFee: subscriptionFee !== undefined ? Number(subscriptionFee) : 0, // NEW
+      mainPricePerKm: mainPricePerKm !== undefined ? Number(mainPricePerKm) : 0, // NEW
       capacity,
       weight,
       description
@@ -101,9 +101,9 @@ export const updateVehicle = async (req, res) => {
     const { id } = req.params;
     const updateData = req.body;
     
-    // Convert subscriptionFee to number if present (NEW)
-    if (updateData.subscriptionFee !== undefined) {
-      updateData.subscriptionFee = Number(updateData.subscriptionFee);
+    // Convert mainPricePerKm to number if present (NEW)
+    if (updateData.mainPricePerKm !== undefined) {
+      updateData.mainPricePerKm = Number(updateData.mainPricePerKm);
     }
     
     const vehicle = await Vehicle.findByIdAndUpdate(
@@ -178,7 +178,7 @@ export const calculateFare = async (req, res) => {
       data: {
         vehicleType: vehicle.vehicleType,
         name: vehicle.name,
-        subscriptionFee: vehicle.subscriptionFee,   // NEW (optional)
+        mainPricePerKm: vehicle.mainPricePerKm,   // NEW (optional)
         breakdown: {
           distance: distanceInKm,
           baseFare: vehicle.baseFare,
