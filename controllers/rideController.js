@@ -577,9 +577,13 @@ export const requestRide = async (req, res) => {
       vehicleType = 'car',
       paymentMethod = 'cash',
       paymentCollectedBy = 'customer',  // 'customer' | 'receiver'
-      receiver
+      receiver,
+      distance: reqDistance,
+      duration: reqDuration
     } = req.body;
 
+
+    console.log(req.body)
     const customer = await Customer.findById(customerId);
     if (!customer) {
       return res.status(404).json({
@@ -630,16 +634,32 @@ export const requestRide = async (req, res) => {
 
     const [pickupLon, pickupLat] = pickupLocation.coordinates;
 
-    // Calculate full route distances sequentially using Google Maps waypoints
-    const routeInfo = await calculateRouteForMultiDrops(
-      pickupLat, pickupLon,
-      allDropLocations,
-      vehicleType
-    );
+    let totalDistance = parseFloat(reqDistance) || 0;
+    let totalDuration = parseInt(reqDuration) || 0;
+    let legDistances = [];
 
-    const legDistances = routeInfo.legDistances;
-    let totalDistance = routeInfo.distance;
-    let totalDuration = routeInfo.duration;
+    // Use frontend distance if provided, otherwise fallback to API calculation
+    if (totalDistance > 0 && totalDuration > 0) {
+      legDistances = [{
+        from: 'pickup',
+        to: 'drop_1',
+        distance: totalDistance,
+        duration: totalDuration,
+        distanceText: `${totalDistance.toFixed(1)} km`,
+        durationText: `${totalDuration} mins`
+      }];
+    } else {
+      // Calculate full route distances sequentially using Google Maps waypoints
+      const routeInfo = await calculateRouteForMultiDrops(
+        pickupLat, pickupLon,
+        allDropLocations,
+        vehicleType
+      );
+
+      legDistances = routeInfo.legDistances;
+      totalDistance = routeInfo.distance;
+      totalDuration = routeInfo.duration;
+    }
 
     // Calculate fare based on total cumulative distance (merchant gets 5% discount)
     const isMerchant = customer.isMerchant || false;
