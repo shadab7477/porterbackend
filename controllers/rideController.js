@@ -19,63 +19,35 @@ export const calculateDistanceAndDuration = async (
   vehicleType = "car"
 ) => {
   try {
-    const response = await axios.post(
-      "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix",
-      {
-        origins: [
-          {
-            waypoint: {
-              location: {
-                latLng: {
-                  latitude: originLat,
-                  longitude: originLon
-                }
-              }
-            }
-          }
-        ],
-        destinations: [
-          {
-            waypoint: {
-              location: {
-                latLng: {
-                  latitude: destLat,
-                  longitude: destLon
-                }
-              }
-            }
-          }
-        ],
-        travelMode: "DRIVE",
-        routingPreference: "TRAFFIC_AWARE"
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
-          "X-Goog-FieldMask": "distanceMeters,duration"
-        }
-      }
-    );
+    const origin = `${originLat},${originLon}`;
+    const destination = `${destLat},${destLon}`;
+    // Use the exact API key provided to match frontend calculation
+    const apiKey = "AIzaSyCgpFAvw-8Q8nHEHz4z5ztx449xZLkilyk";
+    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&key=${apiKey}&traffic_model=best_guess&departure_time=now`;
 
-    const element = response.data[0];
+    const response = await axios.get(url);
+    const route = response.data.routes[0];
+    
+    if (route) {
+      const distanceInKm = route.legs.reduce((total, leg) => total + leg.distance.value, 0) / 1000;
+      
+      const durationInSeconds = route.legs.reduce((total, leg) => {
+        return total + (leg.duration_in_traffic ? leg.duration_in_traffic.value : leg.duration.value);
+      }, 0);
+      
+      const durationInMinutes = Math.ceil(durationInSeconds / 60);
 
-    if (!element || !element.distanceMeters) {
-      throw new Error("No route found");
+      return {
+        distance: parseFloat(distanceInKm.toFixed(2)),
+        duration: durationInMinutes,
+        durationInTraffic: durationInMinutes,
+        distanceText: `${distanceInKm.toFixed(1)} km`,
+        durationText: `${durationInMinutes} mins`,
+        durationInTrafficText: `${durationInMinutes} mins`
+      };
     }
-
-    const distanceInKm = element.distanceMeters / 1000;
-    const durationInSeconds = parseInt(element.duration.replace("s", ""));
-    const durationInMinutes = Math.ceil(durationInSeconds / 60);
-
-    return {
-      distance: parseFloat(distanceInKm.toFixed(2)),
-      duration: durationInMinutes,
-      durationInTraffic: durationInMinutes,
-      distanceText: `${distanceInKm.toFixed(1)} km`,
-      durationText: `${durationInMinutes} mins`,
-      durationInTrafficText: `${durationInMinutes} mins`
-    };
+    
+    throw new Error("No route found");
 
   } catch (error) {
     console.error("Google Maps API error:", error.response?.data || error.message);
