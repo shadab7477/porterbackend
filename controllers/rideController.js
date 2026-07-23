@@ -23,25 +23,13 @@ export const calculateDistanceAndDuration = async (
     const destination = `${destLat},${destLon}`;
     // Use the exact API key provided to match frontend calculation
     const apiKey = "AIzaSyCgpFAvw-8Q8nHEHz4z5ztx449xZLkilyk";
-    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&key=${apiKey}&traffic_model=best_guess&departure_time=now&alternatives=true`;
+    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}&key=${apiKey}&traffic_model=best_guess&departure_time=now`;
 
     const response = await axios.get(url);
+    const route = response.data.routes[0];
     
-    if (response.data.routes && response.data.routes.length > 0) {
-      // Find the route with the absolute shortest distance
-      let shortestRoute = response.data.routes[0];
-      let minDistance = Infinity;
-
-      for (const route of response.data.routes) {
-        const totalDist = route.legs.reduce((total, leg) => total + leg.distance.value, 0);
-        if (totalDist < minDistance) {
-          minDistance = totalDist;
-          shortestRoute = route;
-        }
-      }
-
-      const route = shortestRoute;
-      const distanceInKm = minDistance / 1000;
+    if (route) {
+      const distanceInKm = route.legs.reduce((total, leg) => total + leg.distance.value, 0) / 1000;
       
       const durationInSeconds = route.legs.reduce((total, leg) => {
         return total + (leg.duration_in_traffic ? leg.duration_in_traffic.value : leg.duration.value);
@@ -86,28 +74,12 @@ export const calculateRouteForMultiDrops = async (pickupLat, pickupLon, dropLoca
     }
 
     const apiKey = "AIzaSyCgpFAvw-8Q8nHEHz4z5ztx449xZLkilyk";
-    // Add alternatives=true ONLY if there are no intermediate waypoints 
-    // (Google Maps API throws an error or ignores it if waypoints are present)
-    const hasWaypoints = waypoints.length > 0;
-    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}${hasWaypoints ? `&waypoints=${waypoints}` : ''}&key=${apiKey}&traffic_model=best_guess&departure_time=now${!hasWaypoints ? '&alternatives=true' : ''}`;
+    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}${waypoints ? `&waypoints=${waypoints}` : ''}&key=${apiKey}&traffic_model=best_guess&departure_time=now`;
 
     const response = await axios.get(url);
+    const route = response.data.routes[0];
     
-    if (response.data.routes && response.data.routes.length > 0) {
-      
-      // Find the route with the absolute shortest distance
-      let shortestRoute = response.data.routes[0];
-      let minDistance = Infinity;
-
-      for (const route of response.data.routes) {
-        const totalDist = route.legs.reduce((total, leg) => total + leg.distance.value, 0);
-        if (totalDist < minDistance) {
-          minDistance = totalDist;
-          shortestRoute = route;
-        }
-      }
-
-      const route = shortestRoute;
+    if (route) {
       const legDistances = route.legs.map((leg, index) => {
         const distanceInKm = leg.distance.value / 1000;
         const durationInSeconds = leg.duration_in_traffic ? leg.duration_in_traffic.value : leg.duration.value;
@@ -122,7 +94,7 @@ export const calculateRouteForMultiDrops = async (pickupLat, pickupLon, dropLoca
         };
       });
 
-      const totalDistanceInKm = minDistance / 1000;
+      const totalDistanceInKm = route.legs.reduce((total, leg) => total + leg.distance.value, 0) / 1000;
       const totalDurationInSeconds = route.legs.reduce((total, leg) => total + (leg.duration_in_traffic ? leg.duration_in_traffic.value : leg.duration.value), 0);
       const totalDurationInMinutes = Math.ceil(totalDurationInSeconds / 60);
 
