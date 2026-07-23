@@ -61,6 +61,99 @@ export const calculateDistanceAndDuration = async (
   }
 };
 
+// Calculate route for multiple drops (pickup -> drop1 -> drop2...) using Google Maps Directions API waypoints
+export const calculateRouteForMultiDrops = async (pickupLat, pickupLon, dropLocations, vehicleType = "car") => {
+  try {
+    const origin = `${pickupLat},${pickupLon}`;
+    const destinationLoc = dropLocations[dropLocations.length - 1];
+    const destination = `${destinationLoc.coordinates[1]},${destinationLoc.coordinates[0]}`;
+    
+    let waypoints = '';
+    if (dropLocations.length > 1) {
+      waypoints = dropLocations.slice(0, -1).map(loc => `${loc.coordinates[1]},${loc.coordinates[0]}`).join('|');
+    }
+
+    const apiKey = "AIzaSyCgpFAvw-8Q8nHEHz4z5ztx449xZLkilyk";
+    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}${waypoints ? `&waypoints=${waypoints}` : ''}&key=${apiKey}&traffic_model=best_guess&departure_time=now`;
+
+    const response = await axios.get(url);
+    const route = response.data.routes[0];
+    
+    if (route) {
+      const legDistances = route.legs.map((leg, index) => {
+        const distanceInKm = leg.distance.value / 1000;
+        const durationInSeconds = leg.duration_in_traffic ? leg.duration_in_traffic.value : leg.duration.value;
+        const durationInMinutes = Math.ceil(durationInSeconds / 60);
+        return {
+          from: index === 0 ? 'pickup' : `drop_${index}`,
+          to: `drop_${index + 1}`,
+          distance: parseFloat(distanceInKm.toFixed(2)),
+          duration: durationInMinutes,
+          distanceText: `${distanceInKm.toFixed(1)} km`,
+          durationText: `${durationInMinutes} mins`
+        };
+      });
+
+      const totalDistanceInKm = route.legs.reduce((total, leg) => total + leg.distance.value, 0) / 1000;
+      const totalDurationInSeconds = route.legs.reduce((total, leg) => total + (leg.duration_in_traffic ? leg.duration_in_traffic.value : leg.duration.value), 0);
+      const totalDurationInMinutes = Math.ceil(totalDurationInSeconds / 60);
+
+      return {
+        legDistances,
+        distance: parseFloat(totalDistanceInKm.toFixed(2)),
+        duration: totalDurationInMinutes,
+        durationInTraffic: totalDurationInMinutes,
+        distanceText: `${totalDistanceInKm.toFixed(1)} km`,
+        durationText: `${totalDurationInMinutes} mins`,
+        durationInTrafficText: `${totalDurationInMinutes} mins`
+      };
+    }
+    throw new Error("No route found");
+  } catch (error) {
+    console.error("Google Maps API multi-drop error:", error.message);
+    
+    // Fallback: calculate leg-by-leg using Haversine
+    const legDistances = [];
+    let totalDistance = 0;
+    let totalDuration = 0;
+    let prevLat = pickupLat;
+    let prevLon = pickupLon;
+
+    for (let i = 0; i < dropLocations.length; i++) {
+      const [dropLon, dropLat] = dropLocations[i].coordinates;
+      const legInfo = fallbackCalculateDistanceAndDuration(
+        prevLat, prevLon,
+        dropLat, dropLon,
+        vehicleType
+      );
+
+      legDistances.push({
+        from: i === 0 ? 'pickup' : `drop_${i}`,
+        to: `drop_${i + 1}`,
+        distance: legInfo.distance,
+        duration: legInfo.duration,
+        distanceText: legInfo.distanceText,
+        durationText: legInfo.durationText
+      });
+
+      totalDistance += legInfo.distance;
+      totalDuration += legInfo.duration;
+      prevLat = dropLat;
+      prevLon = dropLon;
+    }
+
+    return {
+      legDistances,
+      distance: parseFloat(totalDistance.toFixed(2)),
+      duration: totalDuration,
+      durationInTraffic: totalDuration,
+      distanceText: `${totalDistance.toFixed(1)} km`,
+      durationText: `${totalDuration} mins`,
+      durationInTrafficText: `${totalDuration} mins`
+    };
+  }
+};
+
 // Fallback Haversine formula calculation
 const fallbackCalculateDistanceAndDuration = (lat1, lon1, lat2, lon2, vehicleType = 'car') => {
   const R = 6371;
@@ -537,37 +630,16 @@ export const requestRide = async (req, res) => {
 
     const [pickupLon, pickupLat] = pickupLocation.coordinates;
 
-    // Calculate leg-by-leg distances sequentially
-    const legDistances = [];
-    let totalDistance = 0;
-    let totalDuration = 0;
-    let prevLat = pickupLat;
-    let prevLon = pickupLon;
+    // Calculate full route distances sequentially using Google Maps waypoints
+    const routeInfo = await calculateRouteForMultiDrops(
+      pickupLat, pickupLon,
+      allDropLocations,
+      vehicleType
+    );
 
-    for (let i = 0; i < allDropLocations.length; i++) {
-      const [dropLon, dropLat] = allDropLocations[i].coordinates;
-      const legInfo = await calculateDistanceAndDuration(
-        prevLat, prevLon,
-        dropLat, dropLon,
-        vehicleType
-      );
-
-      legDistances.push({
-        from: i === 0 ? 'pickup' : `drop_${i}`,
-        to: `drop_${i + 1}`,
-        distance: legInfo.distance,
-        duration: legInfo.duration,
-        distanceText: legInfo.distanceText,
-        durationText: legInfo.durationText
-      });
-
-      totalDistance += legInfo.distance;
-      totalDuration += legInfo.duration;
-      prevLat = dropLat;
-      prevLon = dropLon;
-    }
-
-    totalDistance = parseFloat(totalDistance.toFixed(2));
+    const legDistances = routeInfo.legDistances;
+    let totalDistance = routeInfo.distance;
+    let totalDuration = routeInfo.duration;
 
     // Calculate fare based on total cumulative distance (merchant gets 5% discount)
     const isMerchant = customer.isMerchant || false;
