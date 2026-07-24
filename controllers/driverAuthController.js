@@ -1043,6 +1043,7 @@ export const getDriverProfile = async (req, res) => {
       name: driver.name,
       phone: driver.phone,
       email: driver.email,
+      profileimage:driver.profilePhoto.url,
       isOnline: driver.isOnline,
       isAvailable: driver.isAvailable,
       lastActive: driver.lastActive,
