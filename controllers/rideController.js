@@ -1125,13 +1125,17 @@ export const acceptRide = async (req, res) => {
       });
     }
 
+    const driverProfile = await getDriverProfilePayload(driver);
+    const profileImage = driverProfile?.profileImage || driverProfile?.profileimage || null;
+
     ride.driver = {
       driverId: driver._id,
       name: driver.name,
       phone: driver.phone,
       vehicleType: driver.vehicleType,
       vehicleNumber: driver.vehicleNumber,
-      rating: driver.rating || 0
+      rating: driver.rating || 0,
+      profileImage: profileImage
     };
 
     ride.updateStatus('driver_assigned');
@@ -3106,6 +3110,9 @@ export const acceptRideWithSocket = async (req, res) => {
     const speed = getAverageSpeed(driver.vehicleType);
     const etaToPickup = Math.ceil((distanceToPickup / speed) * 60);
 
+    const driverProfile = await getDriverProfilePayload(driver);
+    const profileImage = driverProfile?.profileImage || driverProfile?.profileimage || null;
+
     // Update ride
     ride.driver = {
       driverId: driver._id,
@@ -3113,7 +3120,8 @@ export const acceptRideWithSocket = async (req, res) => {
       phone: driver.phone,
       vehicleType: driver.vehicleType,
       vehicleNumber: driver.vehicleNumber,
-      rating: driver.rating || 0
+      rating: driver.rating || 0,
+      profileImage: profileImage
     };
     ride.updateStatus('driver_assigned');
     ride.driverETA = {
@@ -3138,7 +3146,8 @@ export const acceptRideWithSocket = async (req, res) => {
         vehicleType: driver.vehicleType,
         vehicleNumber: driver.vehicleNumber,
         rating: driver.rating,
-        location: driverLocation
+        location: driverLocation,
+        profileImage: profileImage
       },
       eta: etaToPickup,
       etaText: `${etaToPickup} mins`,

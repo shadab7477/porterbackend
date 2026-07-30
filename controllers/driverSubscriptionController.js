@@ -71,12 +71,15 @@ export const getMainPricePerKm = async (req, res) => {
       });
     }
 
+    const subscriptionFee = vehicle.subscriptionFee ?? 0;
+
     return res.json({
       success: true,
       data: {
         vehicleType: vehicle.vehicleType,
         vehicleName: vehicle.name,
         mainPricePerKm: vehicle.mainPricePerKm ?? 0,
+        subscriptionFee: subscriptionFee,
       }
     });
   } catch (error) {
@@ -131,9 +134,9 @@ export const createSubscriptionOrder = async (req, res) => {
       vehicleType: { $regex: new RegExp(`^${vehicleType}$`, 'i') }
     });
 
-    const mainPricePerKm = vehicle?.mainPricePerKm ?? 0;
+    const subscriptionFee = vehicle?.subscriptionFee ?? 0;
 
-    if (mainPricePerKm <= 0) {
+    if (subscriptionFee <= 0) {
       // No fee required — mark as completed immediately
       application.subscriptionPayment = {
         status: 'completed',
@@ -150,13 +153,14 @@ export const createSubscriptionOrder = async (req, res) => {
         message: 'No subscription fee required for this vehicle type',
         data: {
           applicationId: application._id,
-          mainPricePerKm: 0
+          mainPricePerKm: 0,
+          subscriptionFee: 0
         }
       });
     }
 
     // Create Razorpay order
-    const amountInPaise = Math.round(mainPricePerKm * 100);
+    const amountInPaise = Math.round(subscriptionFee * 100);
     const receipt = `sub_${application._id.toString().slice(-10)}_${Date.now().toString().slice(-6)}`;
 
     const order = await razorpay.orders.create({
@@ -173,13 +177,13 @@ export const createSubscriptionOrder = async (req, res) => {
       }
     });
 
-    console.log(`✅ Driver subscription order created: ${order.id} for ₹${mainPricePerKm} (${application.phone})`);
+    console.log(`✅ Driver subscription order created: ${order.id} for ₹${subscriptionFee} (${application.phone})`);
 
     // Store pending order on application
     application.subscriptionPayment = {
       status: 'pending',
       razorpayOrderId: order.id,
-      amount: mainPricePerKm,
+      amount: subscriptionFee,
       paidAt: null,
       razorpayPaymentId: null,
     };
@@ -190,7 +194,7 @@ export const createSubscriptionOrder = async (req, res) => {
       data: {
         orderId: order.id,
         amount: order.amount,           // paise
-        amountInRupees: mainPricePerKm,
+        amountInRupees: subscriptionFee,
         currency: order.currency,
         keyId: process.env.RAZORPAY_KEY_ID || 'rzp_live_ST0TZQUt1IwsqU',
         driverName: application.fullName,

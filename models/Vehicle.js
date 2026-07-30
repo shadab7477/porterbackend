@@ -33,6 +33,12 @@ const vehicleSchema = new mongoose.Schema({
     min: 0,
     default: 0                     // temporary default for existing documents
   },
+  subscriptionFee: {
+    type: Number,
+    required: true,
+    min: 0,
+    default: 0
+  },
   capacity: {
     type: Number,
     required: [true, 'Capacity is required'],

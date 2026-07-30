@@ -40,8 +40,7 @@ const rideSchema = new mongoose.Schema({
     phone: String,
     rating: Number
   },
-
-  // Receiver Details
+  // Receiver Details
   receiver: {
     name: { type: String, default: '' },
     phone: { type: String, default: '' }
@@ -57,7 +56,8 @@ const rideSchema = new mongoose.Schema({
     phone: String,
     vehicleType: String,
     vehicleNumber: String,
-    rating: Number
+    rating: Number,
+    profileImage: String
   },
 
   // Locations
@@ -72,6 +72,7 @@ const rideSchema = new mongoose.Schema({
   },
   // Multiple drop locations (up to 4)
   dropLocations: [locationSchema],
+
   // Per-leg distance breakdown
   legDistances: [{
     from: { type: String },      // "pickup", "drop_1", "drop_2", etc.
