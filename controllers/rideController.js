@@ -1734,12 +1734,32 @@ export const cancelRide = async (req, res) => {
       reason: ride.cancellationReason
     });
 
-    // Update driver availability
+    // Update driver availability and clean up global state
     if (ride.driver && ride.driver.driverId) {
       const driver = await Driver.findById(ride.driver.driverId);
       if (driver) {
         driver.isAvailable = true;
         await driver.save();
+      }
+      
+      // Clear ride from global active drivers
+      if (global.activeDrivers) {
+        const driverIdStr = ride.driver.driverId._id ? ride.driver.driverId._id.toString() : ride.driver.driverId.toString();
+        const driverData = global.activeDrivers.get(driverIdStr);
+        if (driverData) {
+          driverData.isAvailable = true;
+          driverData.rideId = null;
+          global.activeDrivers.set(driverIdStr, driverData);
+        }
+      }
+    }
+
+    // Update global active rides map
+    if (global.activeRides) {
+      const rideTrackData = global.activeRides.get(ride.rideId);
+      if (rideTrackData) {
+        rideTrackData.status = 'cancelled';
+        global.activeRides.set(ride.rideId, rideTrackData);
       }
     }
 
