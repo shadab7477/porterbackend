@@ -1157,7 +1157,7 @@ export const acceptRide = async (req, res) => {
 
     await ride.save();
 
-    const driverProfile = await getDriverProfilePayload(driver._id);
+    const resolvedDriverProfile = await getDriverProfilePayload(driver._id);
 
     driver.isAvailable = false;
     await driver.save();
@@ -1176,10 +1176,10 @@ export const acceptRide = async (req, res) => {
         currentLocation: driver.currentLocation,
         lat: driverLat,
         lng: driverLon,
-        profileImage: driverProfile?.profileImage || null,
-        profileimage: driverProfile?.profileimage || null
+        profileImage: resolvedDriverProfile?.profileImage || null,
+        profileimage: resolvedDriverProfile?.profileimage || null
       },
-      driverProfile,
+      driverProfile: resolvedDriverProfile,
       eta: etaInfo.duration,
       etaText: etaInfo.durationText,
       distanceToPickup: etaInfo.distance,
@@ -1241,10 +1241,10 @@ export const acceptRide = async (req, res) => {
           rating: driver.rating,
           lat: driverLat,
           lng: driverLon,
-          profileImage: driverProfile?.profileImage || null,
-          profileimage: driverProfile?.profileimage || null
+          profileImage: resolvedDriverProfile?.profileImage || null,
+          profileimage: resolvedDriverProfile?.profileimage || null
         },
-        driverProfile,
+        driverProfile: resolvedDriverProfile,
         pickupLocation: ride.pickupLocation,
         dropLocation: ride.dropLocation,
         dropLocations: ride.dropLocations || [],
