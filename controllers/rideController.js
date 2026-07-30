@@ -1,6 +1,7 @@
 import Ride from '../models/Ride.js';
 import Driver from '../models/Driver.js';
 import Customer from '../models/Customer.js';
+import DriverApplication from '../models/DriverApplication.js';
 import WalletTransaction from '../models/WalletTransaction.js';
 import axios from 'axios';
 import { logRideFlow } from '../utils/rideLogger.js';
@@ -8,6 +9,45 @@ import { logRideFlow } from '../utils/rideLogger.js';
 // Google Maps API configuration
 const GOOGLE_MAPS_API_KEY = "AIzaSyCgpFAvw-8Q8nHEHz4z5ztx449xZLkilyk";
 const GOOGLE_MAPS_API_URL = "https://maps.googleapis.com/maps/api";
+
+const getDriverProfilePayload = async (driverData) => {
+  if (!driverData) return null;
+
+  const driverId = driverData?._id || driverData?.driverId || driverData;
+  if (!driverId) return null;
+
+  try {
+    const driver = await Driver.findById(driverId).lean();
+    if (!driver) return null;
+
+    let application = null;
+    if (driver.applicationId) {
+      application = await DriverApplication.findById(driver.applicationId).lean();
+    } else {
+      application = await DriverApplication.findOne({ driverId: driver.driverId }).lean();
+    }
+
+    return {
+      id: driver._id,
+      driverId: driver.driverId,
+      name: driver.name,
+      phone: driver.phone,
+      email: driver.email,
+      profileImage: application?.profilePhoto?.url || null,
+      profileimage: application?.profilePhoto?.url || null,
+      vehicleType: driver.vehicleType,
+      vehicleNumber: driver.vehicleNumber,
+      rating: driver.rating || 0,
+      isOnline: driver.isOnline,
+      isAvailable: driver.isAvailable,
+      verificationStatus: application?.verificationStatus || 'pending',
+      applicationId: application?._id || driver.applicationId
+    };
+  } catch (error) {
+    console.error('Error building driver profile payload:', error);
+    return null;
+  }
+};
 
 // ==================== HELPER FUNCTIONS ====================
 
@@ -215,6 +255,69 @@ const formatRelativeTime = (date) => {
 const isPeakHour = () => {
   const hour = new Date().getHours();
   return (hour >= 8 && hour <= 10) || (hour >= 17 && hour <= 20);
+};
+
+const RIDE_STATUSES = [
+  'requested',
+  'searching',
+  'driver_assigned',
+  'driver_arrived',
+  'in_progress',
+  'completed',
+  'cancelled',
+  'no_drivers'
+];
+
+const CANCELLABLE_RIDE_STATUSES = [
+  'requested',
+  'searching',
+  'driver_assigned',
+  'driver_arrived',
+  'in_progress',
+  'no_drivers'
+];
+
+const TERMINAL_RIDE_STATUSES = ['completed', 'cancelled', 'no_drivers'];
+
+const getAuthenticatedActor = (req) => {
+  if (req.customerId) return { userType: 'customer', userId: req.customerId };
+  if (req.driver?.id) return { userType: 'driver', userId: req.driver.id };
+  if (req.adminId) return { userType: 'admin', userId: req.adminId };
+  return { userType: null, userId: null };
+};
+
+const emitRideStatusEvents = (io, ride, statusData) => {
+  if (!io) return;
+
+  io.to(`ride:${ride.rideId}`).emit('ride:status-changed', statusData);
+
+  const rideTrackingNsp = io.of('/ride-tracking');
+  if (rideTrackingNsp) {
+    rideTrackingNsp.to(`ride:${ride.rideId}`).emit('ride:status-changed', statusData);
+  }
+
+  io.of('/admin').to('admin-room').emit('ride:status-changed', statusData);
+};
+
+const setDriverAvailabilityForRideStatus = async (ride, status) => {
+  if (!ride.driver?.driverId) return;
+
+  const driverId = ride.driver.driverId._id || ride.driver.driverId;
+  const isAvailable = TERMINAL_RIDE_STATUSES.includes(status);
+  await Driver.findByIdAndUpdate(driverId, {
+    isAvailable,
+    currentRideId: isAvailable ? null : ride.rideId
+  });
+
+  if (global.activeDrivers) {
+    const driverIdStr = driverId.toString();
+    const driverData = global.activeDrivers.get(driverIdStr);
+    if (driverData) {
+      driverData.isAvailable = isAvailable;
+      driverData.rideId = isAvailable ? null : ride.rideId;
+      global.activeDrivers.set(driverIdStr, driverData);
+    }
+  }
 };
 
 // ==================== MAIN FUNCTION: GET DRIVER PENDING REQUESTS ====================
@@ -769,6 +872,10 @@ export const requestRide = async (req, res) => {
 
     await ride.save();
 
+    const driverProfile = ride.driver?.driverId
+      ? await getDriverProfilePayload(ride.driver.driverId)
+      : null;
+
     const io = req.app.get('io');
     io.emit('ride:requested', {
       rideId: ride.rideId,
@@ -798,6 +905,14 @@ export const requestRide = async (req, res) => {
         duration: ride.duration,
         durationText: `${totalDuration} mins`,
         fare: ride.fare,
+        driverProfile,
+        ...(ride.driver ? {
+          driver: {
+            ...ride.driver,
+            profileImage: driverProfile?.profileImage || null,
+            profileimage: driverProfile?.profileimage || null
+          }
+        } : {}),
         fareBreakdown: {
           ...fare.breakdown,
           legs: legDistances.map((leg, idx) => ({
@@ -1038,6 +1153,8 @@ export const acceptRide = async (req, res) => {
 
     await ride.save();
 
+    const driverProfile = await getDriverProfilePayload(driver._id);
+
     driver.isAvailable = false;
     await driver.save();
 
@@ -1054,8 +1171,11 @@ export const acceptRide = async (req, res) => {
         rating: driver.rating,
         currentLocation: driver.currentLocation,
         lat: driverLat,
-        lng: driverLon
+        lng: driverLon,
+        profileImage: driverProfile?.profileImage || null,
+        profileimage: driverProfile?.profileimage || null
       },
+      driverProfile,
       eta: etaInfo.duration,
       etaText: etaInfo.durationText,
       distanceToPickup: etaInfo.distance,
@@ -1116,8 +1236,11 @@ export const acceptRide = async (req, res) => {
           vehicleNumber: driver.vehicleNumber,
           rating: driver.rating,
           lat: driverLat,
-          lng: driverLon
+          lng: driverLon,
+          profileImage: driverProfile?.profileImage || null,
+          profileimage: driverProfile?.profileimage || null
         },
+        driverProfile,
         pickupLocation: ride.pickupLocation,
         dropLocation: ride.dropLocation,
         dropLocations: ride.dropLocations || [],
@@ -1611,30 +1734,12 @@ export const cancelRide = async (req, res) => {
     const rideId = req.params.rideId || req.body.rideId;
     const reason = req.body.reason || req.body.cancelReason;
 
-    // FIX: Properly determine user type and ID from request
-    let userType = null;
-    let userId = null;
-
-    // Check if it's a customer (has customerId from customerAuthMiddleware)
-    if (req.customerId) {
-      userType = 'customer';
-      userId = req.customerId;
-    }
-    // Check if it's a driver (has driver from driverAuthMiddleware)
-    else if (req.driver && req.driver.id) {
-      userType = 'driver';
-      userId = req.driver.id;
-    }
-    // Check if it's admin (has adminId from authMiddleware)
-    else if (req.adminId) {
-      userType = 'admin';
-      userId = req.adminId;
-    }
+    const { userType, userId } = getAuthenticatedActor(req);
 
     if (!userType) {
       return res.status(401).json({
         success: false,
-        message: 'Authentication required. Please login as customer or driver.'
+        message: 'Authentication required. Please login as customer, driver, or admin.'
       });
     }
 
@@ -1665,11 +1770,10 @@ export const cancelRide = async (req, res) => {
     });
 
     // Check if ride can be cancelled
-    const cancellableStatuses = ['requested', 'searching', 'driver_assigned', 'driver_arrived', 'in_progress', 'no_drivers'];
-    if (!cancellableStatuses.includes(ride.status)) {
+    if (!CANCELLABLE_RIDE_STATUSES.includes(ride.status)) {
       return res.status(400).json({
         success: false,
-        message: `Ride cannot be cancelled. Current status: ${ride.status}. Only ${cancellableStatuses.join(', ')} rides can be cancelled.`
+        message: `Ride cannot be cancelled. Current status: ${ride.status}. Only ${CANCELLABLE_RIDE_STATUSES.join(', ')} rides can be cancelled.`
       });
     }
 
@@ -1706,9 +1810,12 @@ export const cancelRide = async (req, res) => {
     // NO CANCELLATION FEE - Simple cancellation
     const io = req.app.get('io');
 
-    // Update ride status
-    ride.status = 'cancelled';
-    ride.cancelledAt = new Date();
+    const previousStatus = ride.status;
+    ride.updateStatus('cancelled', {
+      changedBy: userType,
+      changedById: userId,
+      reason
+    });
     ride.cancelledBy = userType;
     ride.cancellationReason = reason || (userType === 'customer' ? 'Cancelled by customer' : (userType === 'driver' ? 'Cancelled by driver' : 'Cancelled by admin'));
     ride.cancellationFee = 0; // No fee
@@ -1766,9 +1873,13 @@ export const cancelRide = async (req, res) => {
     // Prepare cancellation data for socket emission
     const cancellationData = {
       rideId: ride.rideId,
+      status: 'cancelled',
+      previousStatus,
       cancelledBy: userType,
+      cancelledById: userId,
       reason: ride.cancellationReason,
-      timestamp: new Date(),
+      cancelledAt: ride.cancelledAt,
+      timestamp: ride.cancelledAt,
       message: `Ride cancelled by ${userType}`,
       cancellationFee: 0
     };
@@ -1816,7 +1927,11 @@ export const cancelRide = async (req, res) => {
     io.to(`ride:${ride.rideId}`).emit('ride:status-changed', {
       rideId: ride.rideId,
       status: 'cancelled',
-      timestamp: new Date(),
+      previousStatus,
+      changedBy: userType,
+      changedById: userId,
+      reason: ride.cancellationReason,
+      timestamp: ride.cancelledAt,
       message: `Ride cancelled by ${userType}`
     });
 
@@ -1839,6 +1954,9 @@ export const cancelRide = async (req, res) => {
       cancelledAt: ride.cancelledAt,
       cancelledBy: ride.cancelledBy,
       cancellationReason: ride.cancellationReason,
+      previousStatus,
+      paymentStatus: ride.paymentStatus,
+      statusHistory: ride.statusHistory,
       message: `Ride cancelled successfully`
     };
 
@@ -1860,6 +1978,125 @@ export const cancelRide = async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to cancel ride'
+    });
+  }
+};
+
+// 9b. Admin updates ride lifecycle status
+export const updateRideStatus = async (req, res) => {
+  try {
+    const { rideId } = req.params;
+    const { status, reason, note } = req.body;
+    const { userType, userId } = getAuthenticatedActor(req);
+
+    if (userType !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin users can update ride status from this endpoint'
+      });
+    }
+
+    if (!RIDE_STATUSES.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid ride status. Allowed statuses: ${RIDE_STATUSES.join(', ')}`
+      });
+    }
+
+    if (status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'Use POST /api/rides/:rideId/cancel to cancel a ride so cancellation metadata is recorded.'
+      });
+    }
+
+    const ride = await Ride.findOne({ rideId })
+      .populate('customer.customerId')
+      .populate('driver.driverId');
+
+    if (!ride) {
+      return res.status(404).json({
+        success: false,
+        message: `Ride with ID ${rideId} not found`
+      });
+    }
+
+    if (ride.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cancelled rides cannot be moved to another status'
+      });
+    }
+
+    if (ride.status === status) {
+      return res.json({
+        success: true,
+        message: `Ride is already ${status}`,
+        data: {
+          rideId: ride.rideId,
+          status: ride.status,
+          statusHistory: ride.statusHistory
+        }
+      });
+    }
+
+    const previousStatus = ride.status;
+    const changedAt = new Date();
+
+    ride.updateStatus(status, {
+      changedBy: 'admin',
+      changedById: userId,
+      reason: reason || note
+    });
+
+    if (status === 'completed' && !ride.paymentStatus) {
+      ride.paymentStatus = ride.paymentMethod === 'cash' ? 'pending' : ride.paymentStatus;
+    }
+
+    await ride.save();
+    await setDriverAvailabilityForRideStatus(ride, status);
+
+    if (global.activeRides) {
+      const rideTrackData = global.activeRides.get(ride.rideId);
+      if (rideTrackData) {
+        rideTrackData.status = status;
+        global.activeRides.set(ride.rideId, rideTrackData);
+      }
+    }
+
+    const statusData = {
+      rideId: ride.rideId,
+      status,
+      previousStatus,
+      changedBy: 'admin',
+      changedById: userId,
+      reason: reason || note,
+      timestamp: changedAt,
+      message: `Ride status changed from ${previousStatus} to ${status}`
+    };
+
+    emitRideStatusEvents(req.app.get('io'), ride, statusData);
+    logRideFlow('admin-ride-status-updated', statusData);
+
+    res.json({
+      success: true,
+      message: 'Ride status updated successfully',
+      data: {
+        rideId: ride.rideId,
+        status: ride.status,
+        previousStatus,
+        changedBy: 'admin',
+        changedAt,
+        reason: reason || note,
+        statusHistory: ride.statusHistory
+      }
+    });
+
+  } catch (error) {
+    console.error('Update ride status error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to update ride status'
     });
   }
 };

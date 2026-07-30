@@ -170,6 +170,31 @@ const rideSchema = new mongoose.Schema({
   },
   cancellationReason: String,
   cancellationFee: { type: Number, default: 0 },
+  statusHistory: [{
+    status: {
+      type: String,
+      enum: [
+        'requested',
+        'searching',
+        'driver_assigned',
+        'driver_arrived',
+        'in_progress',
+        'completed',
+        'cancelled',
+        'no_drivers'
+      ],
+      required: true
+    },
+    previousStatus: String,
+    changedBy: {
+      type: String,
+      enum: ['customer', 'driver', 'admin', 'system'],
+      default: 'system'
+    },
+    changedById: String,
+    reason: String,
+    changedAt: { type: Date, default: Date.now }
+  }],
 
   // Driver Search
   driversNotified: [{
@@ -253,7 +278,8 @@ rideSchema.pre('save', function (next) {
 });
 
 // Methods
-rideSchema.methods.updateStatus = function (status) {
+rideSchema.methods.updateStatus = function (status, metadata = {}) {
+  const previousStatus = this.status;
   this.status = status;
   const now = new Date();
 
@@ -277,6 +303,15 @@ rideSchema.methods.updateStatus = function (status) {
       this.cancelledAt = now;
       break;
   }
+
+  this.statusHistory.push({
+    status,
+    previousStatus,
+    changedBy: metadata.changedBy || 'system',
+    changedById: metadata.changedById ? metadata.changedById.toString() : undefined,
+    reason: metadata.reason,
+    changedAt: now
+  });
 
   return this;
 };

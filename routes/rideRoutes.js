@@ -8,6 +8,7 @@ import {
   startRide,
   completeRide,
   cancelRide,
+  updateRideStatus,
   updateRideLocation,
   trackRide,
   getRideStatus,
@@ -108,6 +109,7 @@ router.post('/:rideId/rate-customer', driverAuthMiddleware, rateCustomer);
 
 // ==================== SHARED ROUTES ====================
 router.post('/:rideId/cancel', authMiddleware, validateCancelRide, cancelRide);
+router.patch('/:rideId/status', authMiddleware, updateRideStatus);
 router.get('/', authMiddleware, getAllRides);
 
 export default router;
