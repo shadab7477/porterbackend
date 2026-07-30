@@ -1,6 +1,7 @@
 import Driver from '../models/Driver.js';
 import Order from '../models/Order.js';
 import Customer from '../models/Customer.js';
+import { logSocketFlow } from '../utils/rideLogger.js';
 
 const initializeSockets = (io) => {
   // ============== NAMESPACES ==============
@@ -20,7 +21,7 @@ const initializeSockets = (io) => {
       });
       
       if (inactiveDrivers.length > 0) {
-        console.log(`Auto-offlining ${inactiveDrivers.length} inactive drivers`);
+        logSocketFlow('driver-inactivity-offline', { count: inactiveDrivers.length });
         
         for (const driver of inactiveDrivers) {
           await Driver.findByIdAndUpdate(driver._id, {
@@ -50,7 +51,7 @@ const initializeSockets = (io) => {
 
   // ============== ADMIN NAMESPACE ==============
   adminNsp.on('connection', (socket) => {
-    console.log(`Admin connected: ${socket.id}`);
+    logSocketFlow('admin-connected', { socketId: socket.id });
     
     socket.join('admin-room');
     
@@ -58,13 +59,13 @@ const initializeSockets = (io) => {
     emitDashboardStats(socket);
     
     socket.on('disconnect', () => {
-      console.log(`Admin disconnected: ${socket.id}`);
+      logSocketFlow('admin-disconnected', { socketId: socket.id });
     });
   });
 
   // ============== DRIVERS NAMESPACE ==============
   driversNsp.on('connection', (socket) => {
-    console.log(`Driver client connected: ${socket.id}`);
+    logSocketFlow('driver-namespace-connected', { socketId: socket.id });
     
     socket.on('driver:join', async (driverId) => {
       if (driverId) {
@@ -80,7 +81,7 @@ const initializeSockets = (io) => {
         
         const driver = await Driver.findById(driverId).select('name phone vehicleType vehicleNumber currentLocation isAvailable isOnline');
         
-        console.log(`Driver ${driverId} joined namespace with socket ${socket.id}`);
+        logSocketFlow('driver-joined-namespace', { driverId, socketId: socket.id });
         
         // Emit driver online event
         driversNsp.emit('driver:online', {
@@ -271,7 +272,7 @@ const initializeSockets = (io) => {
     });
     
     socket.on('disconnect', async () => {
-      console.log(`Driver client disconnected: ${socket.id}`);
+      logSocketFlow('driver-namespace-disconnected', { socketId: socket.id });
       
       try {
         const driver = await Driver.findOneAndUpdate(
@@ -309,11 +310,11 @@ const initializeSockets = (io) => {
 
   // ============== BOOKINGS NAMESPACE ==============
   bookingsNsp.on('connection', (socket) => {
-    console.log(`Booking client connected: ${socket.id}`);
+    logSocketFlow('booking-client-connected', { socketId: socket.id });
     
     socket.on('booking:join', (bookingId) => {
       socket.join(`booking:${bookingId}`);
-      console.log(`Client joined booking room: ${bookingId}`);
+      logSocketFlow('booking-room-joined', { bookingId, socketId: socket.id });
     });
     
     socket.on('booking:status-update', async (data) => {
@@ -361,18 +362,18 @@ const initializeSockets = (io) => {
     });
     
     socket.on('disconnect', () => {
-      console.log(`Booking client disconnected: ${socket.id}`);
+      logSocketFlow('booking-client-disconnected', { socketId: socket.id });
     });
   });
 
   // ============== MAIN NAMESPACE (for backward compatibility) ==============
   io.on('connection', (socket) => {
-    console.log(`Client connected to main namespace: ${socket.id}`);
+    logSocketFlow('main-namespace-connected', { socketId: socket.id });
     
     // Admin joins admin room
     socket.on('join:admin', () => {
       socket.join('admin');
-      console.log(`Admin joined main namespace: ${socket.id}`);
+      logSocketFlow('admin-joined-main', { socketId: socket.id });
       emitDashboardStats(socket);
     });
     
@@ -381,7 +382,7 @@ const initializeSockets = (io) => {
       if (driverId) {
         socket.join(`driver:${driverId}`);
         await Driver.findByIdAndUpdate(driverId, { socketId: socket.id });
-        console.log(`Driver ${driverId} joined main namespace: ${socket.id}`);
+        logSocketFlow('driver-joined-main', { driverId, socketId: socket.id });
       }
     });
     
@@ -389,7 +390,7 @@ const initializeSockets = (io) => {
     socket.on('join:customer', (customerId) => {
       if (customerId) {
         socket.join(`customer:${customerId}`);
-        console.log(`Customer ${customerId} joined main namespace: ${socket.id}`);
+        logSocketFlow('customer-joined-main', { customerId, socketId: socket.id });
       }
     });
     
@@ -442,17 +443,17 @@ const initializeSockets = (io) => {
       const { vehicleType } = data;
       socket.join('drivers-search');
       socket.vehicleTypeFilter = vehicleType;
-      console.log(`Client subscribed to driver updates: ${socket.id}, vehicleType: ${vehicleType}`);
+      logSocketFlow('driver-updates-subscribed', { socketId: socket.id, vehicleType });
     });
     
     // Unsubscribe from driver updates
     socket.on('drivers:unsubscribe', () => {
       socket.leave('drivers-search');
-      console.log(`Client unsubscribed from driver updates: ${socket.id}`);
+      logSocketFlow('driver-updates-unsubscribed', { socketId: socket.id });
     });
     
     socket.on('disconnect', async () => {
-      console.log(`Client disconnected from main namespace: ${socket.id}`);
+      logSocketFlow('main-namespace-disconnected', { socketId: socket.id });
       
       try {
         await Driver.findOneAndUpdate(

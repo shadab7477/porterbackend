@@ -3,6 +3,7 @@ import Driver from '../models/Driver.js';
 import Customer from '../models/Customer.js';
 import WalletTransaction from '../models/WalletTransaction.js';
 import axios from 'axios';
+import { logRideFlow } from '../utils/rideLogger.js';
 
 // Google Maps API configuration
 const GOOGLE_MAPS_API_KEY = "AIzaSyCgpFAvw-8Q8nHEHz4z5ztx449xZLkilyk";
@@ -259,8 +260,12 @@ export const getDriverPendingRequests = async (req, res) => {
 
     const [driverLon, driverLat] = driver.currentLocation.coordinates;
 
-    console.log('🔍 Driver Location:', { lat: driverLat, lon: driverLon });
-    console.log('🔍 Driver Vehicle Type:', driver.vehicleType);
+    logRideFlow('driver-pending-requests', {
+      driverId,
+      driverName: driver.name,
+      vehicleType: driver.vehicleType,
+      status: 'searching'
+    });
 
     // TRY APPROACH 1: $geoNear (requires 2dsphere index)
     try {
@@ -319,11 +324,11 @@ export const getDriverPendingRequests = async (req, res) => {
         { $limit: 20 }
       ]);
 
-      console.log('✅ GeoNear found:', pendingRides.length, 'rides');
+      logRideFlow('geo-near-search', { driverId, rideCount: pendingRides.length });
       return await processRides(pendingRides, driver, driverId, driverLat, driverLon, res);
 
     } catch (geoError) {
-      console.log('⚠️ GeoNear failed, trying $near:', geoError.message);
+      logRideFlow('geo-near-fallback', { driverId, reason: geoError.message });
 
       // TRY APPROACH 2: $near (also requires index)
       try {
@@ -345,7 +350,7 @@ export const getDriverPendingRequests = async (req, res) => {
           .limit(20)
           .lean();
 
-        console.log('✅ $near found:', pendingRides.length, 'rides');
+        logRideFlow('near-search', { driverId, rideCount: pendingRides.length });
 
         // Add distance field manually
         const ridesWithDistance = pendingRides.map(ride => {
@@ -363,7 +368,7 @@ export const getDriverPendingRequests = async (req, res) => {
         return await processRides(ridesWithDistance, driver, driverId, driverLat, driverLon, res);
 
       } catch (nearError) {
-        console.log('⚠️ $near failed, using manual calculation:', nearError.message);
+        logRideFlow('near-search-fallback', { driverId, reason: nearError.message });
 
         // TRY APPROACH 3: Manual calculation (no index needed)
         const allRides = await Ride.find({
@@ -392,7 +397,7 @@ export const getDriverPendingRequests = async (req, res) => {
           .sort((a, b) => a.distanceFromDriver - b.distanceFromDriver)
           .slice(0, 20);
 
-        console.log('✅ Manual calculation found:', ridesWithDistance.length, 'rides');
+        logRideFlow('manual-search', { driverId, rideCount: ridesWithDistance.length });
         return await processRides(ridesWithDistance, driver, driverId, driverLat, driverLon, res);
       }
     }
@@ -584,7 +589,12 @@ export const requestRide = async (req, res) => {
     } = req.body;
 
 
-    console.log(req.body)
+    logRideFlow('ride-requested', {
+      customerId,
+      vehicleType,
+      paymentMethod,
+      status: 'requested'
+    });
     const customer = await Customer.findById(customerId);
     if (!customer) {
       return res.status(404).json({
@@ -934,7 +944,6 @@ export const acceptRide = async (req, res) => {
   try {
     const driverId = req.driver.id;
     const { rideId } = req.body;
-    console.log(req.body);
 
     const driver = await Driver.findById(driverId);
     if (!driver || !driver.isOnline || !driver.isAvailable) {
@@ -954,8 +963,12 @@ export const acceptRide = async (req, res) => {
       });
     }
 
-    console.log(ride);
-
+    logRideFlow('ride-accepted', {
+      rideId: ride.rideId,
+      driverId,
+      customerId: ride.customer?.customerId,
+      status: ride.status
+    });
 
     const [driverLon, driverLat] = driver.currentLocation.coordinates;
     const [pickupLon, pickupLat] = ride.pickupLocation.coordinates;
@@ -1606,19 +1619,16 @@ export const cancelRide = async (req, res) => {
     if (req.customerId) {
       userType = 'customer';
       userId = req.customerId;
-      console.log('👤 Cancelling as CUSTOMER:', userId);
     }
     // Check if it's a driver (has driver from driverAuthMiddleware)
     else if (req.driver && req.driver.id) {
       userType = 'driver';
       userId = req.driver.id;
-      console.log('👤 Cancelling as DRIVER:', userId);
     }
     // Check if it's admin (has adminId from authMiddleware)
     else if (req.adminId) {
       userType = 'admin';
       userId = req.adminId;
-      console.log('👤 Cancelling as ADMIN:', userId);
     }
 
     if (!userType) {
@@ -1647,11 +1657,11 @@ export const cancelRide = async (req, res) => {
       });
     }
 
-    console.log('🚗 Ride found:', {
+    logRideFlow('ride-cancel-request', {
       rideId: ride.rideId,
-      status: ride.status,
-      customerId: ride.customer?.customerId?._id,
-      driverId: ride.driver?.driverId?._id
+      userType,
+      userId,
+      status: ride.status
     });
 
     // Check if ride can be cancelled
@@ -1670,23 +1680,20 @@ export const cancelRide = async (req, res) => {
       const rideCustomerId = ride.customer?.customerId?._id?.toString() || ride.customer?.customerId?.toString();
       if (rideCustomerId === userId.toString()) {
         isAuthorized = true;
-        console.log('✅ Customer authorized to cancel');
       } else {
-        console.log('❌ Customer not authorized:', { rideCustomerId, userId });
+        logRideFlow('cancel-authorization-failed', { rideId: ride.rideId, userType, userId, rideCustomerId });
       }
     }
     else if (userType === 'driver') {
       const rideDriverId = ride.driver?.driverId?._id?.toString() || ride.driver?.driverId?.toString();
       if (rideDriverId === userId.toString()) {
         isAuthorized = true;
-        console.log('✅ Driver authorized to cancel');
       } else {
-        console.log('❌ Driver not authorized:', { rideDriverId, userId });
+        logRideFlow('cancel-authorization-failed', { rideId: ride.rideId, userType, userId, rideDriverId });
       }
     }
     else if (userType === 'admin') {
       isAuthorized = true;
-      console.log('✅ Admin authorized to cancel');
     }
 
     if (!isAuthorized) {
@@ -1720,7 +1727,12 @@ export const cancelRide = async (req, res) => {
     }
 
     await ride.save();
-    console.log('✅ Ride cancelled and saved');
+    logRideFlow('ride-cancelled', {
+      rideId: ride.rideId,
+      userType,
+      status: ride.status,
+      reason: ride.cancellationReason
+    });
 
     // Update driver availability
     if (ride.driver && ride.driver.driverId) {
@@ -1728,7 +1740,6 @@ export const cancelRide = async (req, res) => {
       if (driver) {
         driver.isAvailable = true;
         await driver.save();
-        console.log('✅ Driver availability updated:', driver._id);
       }
     }
 
@@ -1754,14 +1765,12 @@ export const cancelRide = async (req, res) => {
     if (ride.customer && ride.customer.customerId && userType !== 'customer') {
       const customerId = ride.customer.customerId._id || ride.customer.customerId;
       io.to(`customer:${customerId}`).emit('ride:cancelled', cancellationData);
-      console.log(`📡 Cancellation notified to customer: ${customerId}`);
     }
 
     // 2. Notify driver (if they didn't cancel and driver exists)
     if (ride.driver && ride.driver.driverId && userType !== 'driver') {
       const driverId = ride.driver.driverId._id || ride.driver.driverId;
       io.to(`driver:${driverId}`).emit('ride:cancelled', cancellationData);
-      console.log(`📡 Cancellation notified to driver: ${driverId}`);
     }
 
     // 3. Notify all drivers who were previously notified about this ride
@@ -1772,7 +1781,6 @@ export const cancelRide = async (req, res) => {
             ...cancellationData,
             message: `Ride ${ride.rideId} has been cancelled`
           });
-          console.log(`📡 Cancellation notified to previously notified driver: ${notification.driverId}`);
         }
       });
     }
@@ -1781,7 +1789,6 @@ export const cancelRide = async (req, res) => {
     const rideTrackingNsp = io.of('/ride-tracking');
     if (rideTrackingNsp) {
       rideTrackingNsp.to(`ride:${ride.rideId}`).emit('ride:cancelled', cancellationData);
-      console.log(`📡 Cancellation emitted to ride tracking room: ride:${ride.rideId}`);
     }
 
     // Notify customer/driver on default namespace ride tracking channel
@@ -1804,7 +1811,6 @@ export const cancelRide = async (req, res) => {
         fare: ride.fare?.total
       }
     });
-    console.log(`📡 Cancellation notified to admin`);
 
     // Prepare response data
     const responseData = {
@@ -1954,14 +1960,11 @@ export const trackRide = async (req, res) => {
   try {
     const customerId = req.customerId;
     const { rideId } = req.params;
-    console.log(rideId);
     const ride = await Ride.findOne({
       rideId,
       'customer.customerId': customerId,
       status: { $in: ['driver_assigned', 'driver_arrived', 'in_progress'] }
     }).populate('driver.driverId');
-
-    console.log(ride);
 
     if (!ride) {
       return res.status(404).json({
@@ -2375,7 +2378,6 @@ export const updateDriverLocation = async (req, res) => {
   try {
     const driverId = req.driver.id;
     const { latitude, longitude } = req.body;
-    console.log(driverId, latitude, longitude);
 
     if (!latitude || !longitude) {
       return res.status(400).json({

@@ -3,6 +3,7 @@ import Pusher from 'pusher';
 import Driver from '../models/Driver.js';
 import Ride from '../models/Ride.js';
 import Customer from '../models/Customer.js';
+import { logSocketFlow } from '../utils/rideLogger.js';
 
 // Initialize Pusher server-side
 const pusher = new Pusher({
@@ -67,7 +68,7 @@ class PusherService {
         currentRide: rideId
       });
 
-      console.log(`🚗 Driver ${driverId} joined tracking for ride ${rideId}`);
+      logSocketFlow('pusher-driver-tracking-joined', { driverId, rideId });
 
       // Trigger confirmation to driver
       await this.pusher.trigger(channelName, 'tracking:joined', {
@@ -115,7 +116,7 @@ class PusherService {
         this.activeSessions.set(rideId, session);
       }
 
-      console.log(`👤 Customer ${customerId} joined tracking for ride ${rideId}`);
+      logSocketFlow('pusher-customer-tracking-joined', { customerId, rideId });
 
       // Get ride details
       const ride = await Ride.findOne({ rideId });

@@ -3,18 +3,21 @@ import Driver from '../models/Driver.js';
 import Ride from '../models/Ride.js';
 import Customer from '../models/Customer.js';
 import ChatMessage from '../models/ChatMessage.js';
+import { logSocketFlow } from '../utils/rideLogger.js';
 
 // Store active tracking sessions
 const activeTrackingSessions = new Map(); // rideId -> session object
 
-// Enhanced logging function
+// Concise logging helper for ride/socket flow
 const logWithTimestamp = (level, message, data = null) => {
   const timestamp = new Date().toISOString();
   const logPrefix = `[${timestamp}] [${level.toUpperCase()}]`;
 
-  if (data) {
-    console.log(`${logPrefix} ${message}`);
-    console.log(`${logPrefix} Data:`, JSON.stringify(data, null, 2));
+  if (data && Object.keys(data).length) {
+    const summary = data.rideId ? ` ride=${data.rideId}` : '';
+    const extra = data.driverId ? ` driver=${data.driverId}` : '';
+    const customer = data.customerId ? ` customer=${data.customerId}` : '';
+    console.log(`${logPrefix} ${message}${summary}${extra}${customer}`);
   } else {
     console.log(`${logPrefix} ${message}`);
   }
@@ -23,17 +26,10 @@ const logWithTimestamp = (level, message, data = null) => {
 export const initializeRideTrackingSockets = (io) => {
 
   io.on('connection', (socket) => {
-    logWithTimestamp('info', `🟢 Ride tracking client connected: ${socket.id}`);
-    logWithTimestamp('debug', `Socket handshake details:`, {
-      id: socket.id,
-      headers: socket.handshake.headers,
-      query: socket.handshake.query,
-      address: socket.handshake.address
-    });
+    logWithTimestamp('info', `Ride tracking client connected`, { socketId: socket.id });
 
-    // Debug listener for all events
-    socket.onAny((eventName, ...args) => {
-      console.log(`📡 [SOCKET RECEIVE] Event: "${eventName}" | Args:`, JSON.stringify(args, null, 2));
+    socket.onAny((eventName) => {
+      logSocketFlow(`socket:${eventName}`, { socketId: socket.id });
     });
 
     // ==================== DRIVER TRACKING ====================
@@ -42,13 +38,13 @@ export const initializeRideTrackingSockets = (io) => {
      * Driver joins tracking for a specific ride
      */
     socket.on('driver:join-tracking', async (data) => {
-      logWithTimestamp('info', `🚗 Driver join tracking event received`, data);
+      logWithTimestamp('info', `Driver join tracking`, data);
 
       try {
         const { driverId, rideId } = data;
 
         if (!driverId || !rideId) {
-          logWithTimestamp('error', `Missing required fields: driverId=${driverId}, rideId=${rideId}`);
+          logWithTimestamp('error', `Missing tracking fields`, { driverId, rideId });
           socket.emit('error', { message: 'Driver ID and Ride ID are required' });
           return;
         }
@@ -136,7 +132,7 @@ export const initializeRideTrackingSockets = (io) => {
           currentRideId: updatedDriver?.currentRideId
         });
 
-        logWithTimestamp('info', `🚗 Driver ${driverId} joined tracking for ride ${rideId}`);
+        logWithTimestamp('info', `Driver joined tracking`, { driverId, rideId });
 
         // Fetch ride details to return in tracking:joined
         const ride = await Ride.findOne({ rideId: rideId })
@@ -181,12 +177,12 @@ export const initializeRideTrackingSockets = (io) => {
           socketId: socket.id
         };
         socket.emit('tracking:joined', confirmationData);
-        logWithTimestamp('debug', `Sent tracking:joined confirmation to driver`, confirmationData);
+        logWithTimestamp('debug', `Sent tracking confirmation`, { rideId, driverId });
 
         // If customer is already tracking, notify them
         const currentSession = activeTrackingSessions.get(rideId);
         if (currentSession && currentSession.customerSocketId) {
-          logWithTimestamp('info', `Customer already tracking, notifying them about driver`, {
+          logWithTimestamp('info', `Notifying customer about driver`, {
             rideId,
             customerSocketId: currentSession.customerSocketId,
             driverId
@@ -199,7 +195,7 @@ export const initializeRideTrackingSockets = (io) => {
             timestamp: new Date()
           });
         } else {
-          logWithTimestamp('debug', `No customer tracking yet for ride ${rideId}`);
+          logWithTimestamp('debug', `Waiting for customer tracking`, { rideId });
         }
 
       } catch (error) {
@@ -221,13 +217,13 @@ export const initializeRideTrackingSockets = (io) => {
      * Customer joins to track their ride
      */
     socket.on('customer:join-tracking', async (data) => {
-      logWithTimestamp('info', `👤 Customer join tracking event received`, data);
+      logWithTimestamp('info', `Customer join tracking`, data);
 
       try {
         const { customerId, rideId } = data;
 
         if (!customerId || !rideId) {
-          logWithTimestamp('error', `Missing required fields: customerId=${customerId}, rideId=${rideId}`);
+          logWithTimestamp('error', `Missing tracking fields`, { customerId, rideId });
           socket.emit('error', { message: 'Customer ID and Ride ID are required' });
           return;
         }
@@ -280,7 +276,7 @@ export const initializeRideTrackingSockets = (io) => {
           rideId: rideId
         });
 
-        logWithTimestamp('info', `👤 Customer ${customerId} joined tracking for ride ${rideId}`);
+        logWithTimestamp('info', `Customer joined tracking`, { customerId, rideId });
 
         // Get ride details with populated data - FIX: use findOne with rideId
         logWithTimestamp('debug', `Fetching ride details from database`, { rideId });
@@ -1225,14 +1221,10 @@ export const initializeRideTrackingSockets = (io) => {
     socket.on('chat:join', (data) => {
       try {
         const { rideId, userId, userType } = data;
-        console.log("🚀 ~ socket.on ~ chat:join ~ data:", data)
         if (!rideId || !userId) {
           socket.emit('error', { message: 'Ride ID and User ID required' });
           return;
         }
-        console.log("🚀 ~ socket.on ~ chat:join ~ rideId:", rideId)
-        console.log("🚀 ~ socket.on ~ chat:join ~ userId:", userId)
-        console.log("🚀 ~ socket.on ~ chat:join ~ userType:", userType)
 
         // Store chat info on socket
         socket.chatRideId = rideId;
@@ -1503,10 +1495,6 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   const distance = R * c;
 
-  // Log distance calculation for debugging
-  if (process.env.NODE_ENV === 'development') {
-    console.log(`[DEBUG] Distance calculation: ${lat1},${lon1} -> ${lat2},${lon2} = ${distance.toFixed(2)}km`);
-  }
 
   return distance;
 }
@@ -1539,10 +1527,6 @@ function getAverageSpeed(vehicleType) {
 
   const speed = speeds[vehicleType] || 25;
 
-  // Log speed for debugging
-  if (process.env.NODE_ENV === 'development') {
-    console.log(`[DEBUG] Vehicle type: ${vehicleType}, average speed: ${speed}km/h`);
-  }
 
   return speed;
 }
@@ -1565,9 +1549,6 @@ function getStatusMessage(status) {
 
   const message = messages[status] || 'Status updated';
 
-  if (process.env.NODE_ENV === 'development') {
-    console.log(`[DEBUG] Status message for ${status}: ${message}`);
-  }
 
   return message;
 }
