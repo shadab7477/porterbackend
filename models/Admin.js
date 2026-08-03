@@ -53,8 +53,7 @@ adminSchema.methods.generateAuthToken = function() {
       username: this.username,
       role: this.role 
     },
-    process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRE || '24h' }
+    process.env.JWT_SECRET
   );
 };
 

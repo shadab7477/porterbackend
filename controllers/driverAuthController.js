@@ -15,8 +15,7 @@ const generateDriverToken = (driverId, phone, isVerified = false) => {
       role: 'driver',
       isVerified
     },
-    process.env.JWT_SECRET,
-    { expiresIn: '30d' }
+    process.env.JWT_SECRET
   );
 };
 
@@ -265,7 +264,7 @@ export const verifyOTP = async (req, res) => {
           requiresRegistration = false; // No need to register again
           statusMessage = 'Your application is under review. Please wait for verification.';
           
-          // Generate token for checking status (short-lived)
+          // Generate token for checking status
           driverToken = jwt.sign(
             { 
               phone: targetPhone, 
@@ -275,8 +274,7 @@ export const verifyOTP = async (req, res) => {
               requiresRegistration: false,
               applicationStatus: applicationStatus
             },
-            process.env.JWT_SECRET,
-            { expiresIn: '24h' }
+            process.env.JWT_SECRET
           );
           break;
           
@@ -295,8 +293,7 @@ export const verifyOTP = async (req, res) => {
               isVerified: false,
               requiresRegistration: true
             },
-            process.env.JWT_SECRET,
-            { expiresIn: '24h' }
+            process.env.JWT_SECRET
           );
           break;
           
@@ -316,8 +313,7 @@ export const verifyOTP = async (req, res) => {
               requiresRegistration: false,
               applicationStatus: applicationStatus
             },
-            process.env.JWT_SECRET,
-            { expiresIn: '24h' }
+            process.env.JWT_SECRET
           );
           break;
           
@@ -335,8 +331,7 @@ export const verifyOTP = async (req, res) => {
               isVerified: false,
               requiresRegistration: true
             },
-            process.env.JWT_SECRET,
-            { expiresIn: '24h' }
+            process.env.JWT_SECRET
           );
       }
     } else {
@@ -356,8 +351,7 @@ export const verifyOTP = async (req, res) => {
           isVerified: false,
           requiresRegistration: true
         },
-        process.env.JWT_SECRET,
-        { expiresIn: '24h' }
+        process.env.JWT_SECRET
       );
     }
 

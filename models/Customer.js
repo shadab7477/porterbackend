@@ -87,8 +87,7 @@ customerSchema.methods.generateAuthToken = function () {
       phone: this.phone,
       role: 'customer'
     },
-    process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRE || '7d' }
+    process.env.JWT_SECRET
   );
 };
 
