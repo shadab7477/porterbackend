@@ -19,12 +19,12 @@ import {
   getNearbyDrivers,
   calculateFareEstimate,
   getDriverPendingRequests,
-  updateDriverLocation , // Add this import,
+  updateDriverLocation,
   getDriverLocationForTracking,
   getRideTrackingInfo,
   acceptRideWithSocket,
-  updateDriverLocationWithSocket
-
+  updateDriverLocationWithSocket,
+  verifyRidePayment
 } from '../controllers/rideController.js';
 import { authMiddleware } from '../middleware/authMiddleware.js';
 import { customerAuthMiddleware } from '../middleware/customerAuthMiddleware.js';
@@ -81,6 +81,7 @@ router.get('/fare-estimate', calculateFareEstimate);
 
 // ==================== CUSTOMER ROUTES ====================
 router.post('/request', customerAuthMiddleware, requestRide);
+router.post('/:rideId/verify-payment', customerAuthMiddleware, verifyRidePayment);
 router.get('/history', customerAuthMiddleware, getCustomerRideHistory);
 router.get('/:rideId/status', customerAuthMiddleware, getRideStatus);
 router.get('/:rideId/track', customerAuthMiddleware, trackRide);

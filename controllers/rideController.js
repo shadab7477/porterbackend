@@ -905,6 +905,7 @@ export const requestRide = async (req, res) => {
         duration: ride.duration,
         durationText: `${totalDuration} mins`,
         fare: ride.fare,
+        paymentMethod: ride.paymentMethod,
         driverProfile,
         ...(ride.driver ? {
           driver: {
@@ -1020,7 +1021,7 @@ const findNearbyDrivers = async (ride, io, radius = 5) => {
     ride.driversNotified = notifiedDrivers;
     await ride.save();
 
-    setTimeout(() => handleDriverResponseTimeout(ride, io), 120000);
+    setTimeout(() => handleDriverResponseTimeout(ride, io), 60000);
 
   } catch (error) {
     console.error('Find nearby drivers error:', error);
@@ -3367,6 +3368,59 @@ export const getRideTrackingInfo = async (req, res) => {
       success: false,
       message: error.message || 'Failed to get tracking info'
     });
+  }
+};
+
+// 18. Verify Ride Payment
+export const verifyRidePayment = async (req, res) => {
+  try {
+    const { rideId } = req.params;
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+
+    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
+      return res.status(400).json({ success: false, message: 'Payment details and signature are required' });
+    }
+
+    const ride = await Ride.findOne({ rideId });
+    if (!ride) {
+      return res.status(404).json({ success: false, message: 'Ride not found' });
+    }
+
+    const crypto = await import('crypto');
+    const body = razorpay_order_id + "|" + razorpay_payment_id;
+    const expectedSignature = crypto.default
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET || 'OZdye2d48zaLY1gSko96eJsX')
+      .update(body.toString())
+      .digest('hex');
+
+    if (expectedSignature !== razorpay_signature) {
+      return res.status(400).json({ success: false, message: 'Payment verification failed' });
+    }
+
+    ride.paymentStatus = 'completed';
+    ride.paymentIntentId = razorpay_payment_id;
+    await ride.save();
+
+    const io = req.app.get('io');
+    io.emit(`ride:${ride.rideId}:payment_completed`, {
+      rideId: ride.rideId,
+      message: 'Payment completed successfully',
+      amount: ride.fare.finalAmount,
+    });
+    
+    // Also send to namespace for backward compatibility
+    const rideTrackingNsp = io.of('/ride-tracking');
+    if (rideTrackingNsp) {
+      rideTrackingNsp.to(`ride:${ride.rideId}`).emit('ride:payment_completed', {
+        rideId: ride.rideId,
+        message: 'Payment completed successfully',
+      });
+    }
+
+    res.json({ success: true, message: 'Payment verified and updated successfully' });
+  } catch (error) {
+    console.error('Verify ride payment error:', error);
+    res.status(500).json({ success: false, message: 'Failed to verify payment' });
   }
 };
 

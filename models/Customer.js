@@ -38,6 +38,15 @@ const customerSchema = new mongoose.Schema({
     type: bankDetailsSchema,
     default: null
   },
+  savedAddresses: [{
+    id: { type: String, required: true },
+    type: { type: String, enum: ['home', 'work', 'other'], default: 'other' },
+    address: { type: String, required: true },
+    lat: { type: Number },
+    lng: { type: Number },
+    name: { type: String },
+    phone: { type: String }
+  }],
   isBlocked: {
     type: Boolean,
     default: false

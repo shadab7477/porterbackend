@@ -279,9 +279,12 @@ export const getCustomerProfile = async (req, res) => {
 
 export const updateCustomerProfile = async (req, res) => {
   try {
-    const { name, email, bankDetails } = req.body;
+    const { name, email, bankDetails, savedAddresses } = req.body;
 
     const updateData = { name, email };
+    if (savedAddresses) {
+      updateData.savedAddresses = savedAddresses;
+    }
     if (bankDetails) {
       const { accountHolderName, accountNumber, ifscCode, bankName, branchName } = bankDetails;
       if (!accountHolderName || !accountNumber || !ifscCode) {
