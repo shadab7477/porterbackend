@@ -1410,7 +1410,6 @@ export const startRide = async (req, res) => {
     // If customer is paying → payment must be done before ride starts
     // If receiver is paying → skip check here, will be enforced at completeRide
     const customerMustPayFirst = ride.paymentMethod !== 'cash'
-      && ride.paymentMethod !== 'wallet'
       && ride.paymentCollectedBy === 'customer'
       && ride.paymentStatus !== 'completed';
 
@@ -1531,7 +1530,7 @@ export const completeRide = async (req, res) => {
     }
 
     // ====== WALLET ACCOUNTING LOGIC ======
-    const commissionAmount = ride.fare.finalAmount * 0.20;
+    const commissionAmount = ride.fare.finalAmount * 0.15;
     const driverEarning = ride.fare.finalAmount - commissionAmount;
 
     ride.fare.commissionAmount = commissionAmount;
@@ -1587,35 +1586,9 @@ export const completeRide = async (req, res) => {
     driver.isAvailable = true;
     await driver.save();
 
-    // ====== WALLET RIDE: Auto-deduct from customer at completion ======
     let customerWalletNew = null;
-    if (ride.paymentMethod === 'wallet') {
-      const customer = await Customer.findById(ride.customer.customerId);
-      if (customer) {
-        const custPrevBalance = customer.walletBalance;
-        customer.walletBalance -= ride.fare.finalAmount;
-        if (customer.walletBalance < 0) customer.walletBalance = 0; // safety floor
-        await customer.save();
-        customerWalletNew = customer.walletBalance;
-
-        await WalletTransaction.create({
-          userId: customer._id,
-          userType: 'Customer',
-          amount: -ride.fare.finalAmount,
-          type: 'debit',
-          transactionCategory: 'other',
-          description: `Auto-payment for ride ${ride.rideId}`,
-          previousBalance: custPrevBalance,
-          newBalance: customer.walletBalance,
-          orderId: ride._id,
-          status: 'completed'
-        });
-
-        ride.paymentStatus = 'completed';
-        await ride.save();
-      }
-    }
-    // ===================================================================
+    // Wallet deduction is now handled by the payWithWallet API before the ride starts.
+    // We only preserve the variable customerWalletNew for potential use below.
 
     // ====== MERCHANT CASHBACK: Credit cashback to customer wallet ======
     if (ride.fare.isMerchantRide && ride.fare.cashbackAmount > 0) {
@@ -2393,11 +2366,21 @@ export const rateDriver = async (req, res) => {
     const { rideId } = req.params;
     const { rating, review } = req.body;
 
-    const ride = await Ride.findOne({
-      rideId,
+    const query = {
       'customer.customerId': customerId,
       status: 'completed'
-    });
+    };
+
+    if (rideId.match(/^[0-9a-fA-F]{24}$/)) {
+      query.$or = [{ rideId }, { _id: rideId }];
+    } else {
+      query.rideId = rideId;
+    }
+
+    console.log('[rateDriver] Attempting to find ride with query:', JSON.stringify(query));
+    const ride = await Ride.findOne(query);
+    console.log('[rateDriver] Ride found:', ride ? ride._id : 'null');
+
 
     if (!ride) {
       return res.status(404).json({
@@ -2457,11 +2440,18 @@ export const rateCustomer = async (req, res) => {
     const { rideId } = req.params;
     const { rating, review } = req.body;
 
-    const ride = await Ride.findOne({
-      rideId,
+    const query = {
       'driver.driverId': driverId,
       status: 'completed'
-    });
+    };
+
+    if (rideId.match(/^[0-9a-fA-F]{24}$/)) {
+      query.$or = [{ rideId }, { _id: rideId }];
+    } else {
+      query.rideId = rideId;
+    }
+
+    const ride = await Ride.findOne(query);
 
     if (!ride) {
       return res.status(404).json({
