@@ -40,12 +40,23 @@ const customerSchema = new mongoose.Schema({
   },
   savedAddresses: [{
     id: { type: String, required: true },
-    type: { type: String, enum: ['home', 'work', 'other'], default: 'other' },
-    address: { type: String, required: true },
+    type: { type: String, default: 'other' },
+    addressType: { type: String, default: 'other' },
+    tag: { type: String },
+    address: { type: String },
+    fullAddress: { type: String },
+    addressLine1: { type: String },
+    addressLine2: { type: String },
+    city: { type: String },
+    state: { type: String },
+    pincode: { type: String },
+    landmark: { type: String },
     lat: { type: Number },
     lng: { type: Number },
     name: { type: String },
-    phone: { type: String }
+    phone: { type: String },
+    nickname: { type: String },
+    createdAt: { type: Date }
   }],
   isBlocked: {
     type: Boolean,
