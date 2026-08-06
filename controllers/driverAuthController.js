@@ -4,6 +4,7 @@ import Driver from '../models/Driver.js';
 import OTP from '../models/OTP.js';
 import { uploadToCloudinary } from '../config/cloudinary.js';
 import { generateOTP, sendSmsOtp } from '../utils/smsService.js';
+import DriverWallet from '../models/DriverWallet.js';
 
 // Generate driver auth token (long-lived token for authenticated drivers)
 const generateDriverToken = (driverId, phone, isVerified = false) => {
@@ -483,32 +484,38 @@ export const driverLogin = async (req, res) => {
       await driver.save();
     }
 
-    const driverToken = generateDriverToken(driver._id, targetPhone, true);
+        let walletBalance = 0;
+        try {
+          const wallet = await DriverWallet.findOne({ driverId: driver._id });
+          if (wallet) walletBalance = wallet.balance;
+        } catch (err) {}
 
-    res.status(200).json({
-      success: true,
-      message: 'Login successful',
-      data: {
-        token: driverToken,
-        driver: {
-          id: driver._id,
-          driverId: driver.driverId,
-          applicationId: driver.applicationId?._id || driver.applicationId,
-          name: driver.name,
-          phone: driver.phone,
-          email: driver.email,
-          isOnline: driver.isOnline,
-          isAvailable: driver.isAvailable,
-          vehicleType: driver.vehicleType,
-          vehicleNumber: driver.vehicleNumber,
-          rating: driver.rating,
-          totalTrips: driver.totalTrips,
-          totalEarnings: driver.totalEarnings,
-          walletBalance: driver.walletBalance,
-          applicationStatus: application.verificationStatus
-        }
-      }
-    });
+        const driverToken = generateDriverToken(driver._id, targetPhone, true);
+
+        res.status(200).json({
+          success: true,
+          message: 'Login successful',
+          data: {
+            token: driverToken,
+            driver: {
+              id: driver._id,
+              driverId: driver.driverId,
+              applicationId: driver.applicationId?._id || driver.applicationId,
+              name: driver.name,
+              phone: driver.phone,
+              email: driver.email,
+              isOnline: driver.isOnline,
+              isAvailable: driver.isAvailable,
+              vehicleType: driver.vehicleType,
+              vehicleNumber: driver.vehicleNumber,
+              rating: driver.rating,
+              totalTrips: driver.totalTrips,
+              totalEarnings: driver.totalEarnings,
+              walletBalance: walletBalance,
+              applicationStatus: application.verificationStatus
+            }
+          }
+        });
 
   } catch (error) {
     console.error('Error in driverLogin:', error);
@@ -1030,6 +1037,12 @@ export const getDriverProfile = async (req, res) => {
     const driverId = req.driver.id;
     const { driver, application } = await checkDriverVerification(driverId);
 
+    let walletBalance = 0;
+    try {
+      const wallet = await DriverWallet.findOne({ driverId: driver._id });
+      if (wallet) walletBalance = wallet.balance;
+    } catch (err) {}
+
     const profileData = {
       id: driver._id,
       driverId: driver.driverId,
@@ -1047,7 +1060,7 @@ export const getDriverProfile = async (req, res) => {
         totalEarnings: driver.totalEarnings,
         totalTrips: driver.totalTrips,
         rating: driver.rating,
-        walletBalance: driver.walletBalance
+        walletBalance: walletBalance
       },
       subscription: driver.subscription,
       applicationDetails: application ? {

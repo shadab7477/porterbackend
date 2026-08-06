@@ -2,13 +2,32 @@ import Ride from '../models/Ride.js';
 import Driver from '../models/Driver.js';
 import Customer from '../models/Customer.js';
 import DriverApplication from '../models/DriverApplication.js';
-import WalletTransaction from '../models/WalletTransaction.js';
+import CustomerWalletTransaction from '../models/CustomerWalletTransaction.js';
+import DriverWalletTransaction from '../models/DriverWalletTransaction.js';
+import CustomerWallet from '../models/CustomerWallet.js';
+import DriverWallet from '../models/DriverWallet.js';
 import axios from 'axios';
 import { logRideFlow } from '../utils/rideLogger.js';
 
 // Google Maps API configuration
 const GOOGLE_MAPS_API_KEY = "AIzaSyCgpFAvw-8Q8nHEHz4z5ztx449xZLkilyk";
 const GOOGLE_MAPS_API_URL = "https://maps.googleapis.com/maps/api";
+
+const getOrCreateCustomerWallet = async (customerId) => {
+    let wallet = await CustomerWallet.findOne({ customerId });
+    if (!wallet) {
+        wallet = await CustomerWallet.create({ customerId, balance: 0 });
+    }
+    return wallet;
+};
+
+const getOrCreateDriverWallet = async (driverId) => {
+    let wallet = await DriverWallet.findOne({ driverId });
+    if (!wallet) {
+        wallet = await DriverWallet.create({ driverId, balance: 0 });
+    }
+    return wallet;
+};
 
 const getDriverProfilePayload = async (driverData) => {
   if (!driverData) return null;
@@ -858,12 +877,12 @@ export const requestRide = async (req, res) => {
 
     // ====== WALLET: Pre-check balance at booking time ======
     if (paymentMethod === 'wallet') {
-      const freshCustomer = await Customer.findById(customerId).select('walletBalance');
-      if (!freshCustomer || freshCustomer.walletBalance < fare.finalAmount) {
+      const customerWallet = await getOrCreateCustomerWallet(customerId);
+      if (!customerWallet || customerWallet.balance < fare.finalAmount) {
         return res.status(400).json({
           success: false,
-          message: `Insufficient wallet balance. Your balance is ₹${freshCustomer?.walletBalance || 0}, ride fare is ₹${fare.finalAmount}. Please top up your wallet first.`,
-          walletBalance: freshCustomer?.walletBalance || 0,
+          message: `Insufficient wallet balance. Your balance is ₹${customerWallet?.balance || 0}, ride fare is ₹${fare.finalAmount}. Please top up your wallet first.`,
+          walletBalance: customerWallet?.balance || 0,
           required: fare.finalAmount
         });
       }
@@ -1558,8 +1577,9 @@ export const completeRide = async (req, res) => {
       description = ride.paymentMethod === 'wallet' ? 'Wallet order credit' : 'Online order credit';
     }
 
-    const previousBalance = driver.walletBalance;
-    driver.walletBalance += transactionAmount;
+    const driverWallet = await getOrCreateDriverWallet(driver._id);
+    const previousBalance = driverWallet.balance;
+    driverWallet.balance += transactionAmount;
 
     // Dynamic Due Limits based on vehicle
     const dueLimits = {
@@ -1577,7 +1597,7 @@ export const completeRide = async (req, res) => {
     const vType = (driver.vehicleType || 'bike').toLowerCase();
     const limit = dueLimits[vType] || 300;
 
-    if (driver.walletBalance <= -limit) {
+    if (driverWallet.balance <= -limit) {
       driver.isBlocked = true;
       driver.blockReason = 'due_limit_exceeded';
     }
@@ -1593,42 +1613,40 @@ export const completeRide = async (req, res) => {
 
     // ====== MERCHANT CASHBACK: Credit cashback to customer wallet ======
     if (ride.fare.isMerchantRide && ride.fare.cashbackAmount > 0) {
-      const customer = await Customer.findById(ride.customer.customerId);
-      if (customer) {
-        const custPrevBalance = customer.walletBalance;
-        customer.walletBalance += ride.fare.cashbackAmount;
-        await customer.save();
-        
-        // Update customerWalletNew if it was already fetched for wallet ride
-        if (customerWalletNew !== null) {
-            customerWalletNew = customer.walletBalance;
-        }
-
-        await WalletTransaction.create({
-          userId: customer._id,
-          userType: 'Customer',
-          amount: ride.fare.cashbackAmount,
-          type: 'credit',
-          transactionCategory: 'bonus',
-          description: `Merchant cashback for ride ${ride.rideId}`,
-          previousBalance: custPrevBalance,
-          newBalance: customer.walletBalance,
-          orderId: ride._id,
-          status: 'completed'
-        });
+      const customerWallet = await getOrCreateCustomerWallet(ride.customer.customerId);
+      const custPrevBalance = customerWallet.balance;
+      customerWallet.balance += ride.fare.cashbackAmount;
+      await customerWallet.save();
+      
+      // Update customerWalletNew if it was already fetched for wallet ride
+      if (customerWalletNew !== null) {
+          customerWalletNew = customerWallet.balance;
       }
+
+      await CustomerWalletTransaction.create({
+        customerId: ride.customer.customerId,
+        amount: ride.fare.cashbackAmount,
+        type: 'credit',
+        transactionCategory: 'bonus',
+        description: `Merchant cashback for ride ${ride.rideId}`,
+        previousBalance: custPrevBalance,
+        newBalance: customerWallet.balance,
+        orderId: ride._id,
+        status: 'completed'
+      });
     }
     // ===================================================================
 
-    await WalletTransaction.create({
-      userId: driver._id,
-      userType: 'Driver',
+    await driverWallet.save();
+
+    await DriverWalletTransaction.create({
+      driverId: driver._id,
       amount: transactionAmount,
       type: txType,
       transactionCategory: category,
       description: description,
       previousBalance: previousBalance,
-      newBalance: driver.walletBalance,
+      newBalance: driverWallet.balance,
       orderId: ride._id,
       status: 'completed'
     });
@@ -1665,7 +1683,12 @@ export const completeRide = async (req, res) => {
       message: 'Ride completed'
     });
 
-    // Notify DRIVER — earnings credited
+    // Notify driver about new balance
+    io.to(`driver:${driverId}`).emit('wallet:balance_updated', {
+      walletBalance: driverWallet.balance,
+      tripEarnings: driverEarning,
+      rideId: ride.rideId
+    });
     io.to(`driver:${driverId}`).emit('driver:earnings_credited', {
       rideId: ride.rideId,
       message: `₹${driverEarning.toFixed(2)} credited to your wallet`,

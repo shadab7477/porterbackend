@@ -3,7 +3,10 @@ import Razorpay from 'razorpay';
 import Ride from '../models/Ride.js';
 import Payment from '../models/Payment.js';
 import crypto from 'crypto';
-import WalletTransaction from '../models/WalletTransaction.js';
+import CustomerWalletTransaction from '../models/CustomerWalletTransaction.js';
+import DriverWalletTransaction from '../models/DriverWalletTransaction.js';
+import CustomerWallet from '../models/CustomerWallet.js';
+import DriverWallet from '../models/DriverWallet.js';
 import Customer from '../models/Customer.js';
 import Driver from '../models/Driver.js';
 
@@ -12,6 +15,22 @@ const razorpay = new Razorpay({
     key_id: process.env.RAZORPAY_KEY_ID || 'rzp_live_ST0TZQUt1IwsqU',
     key_secret: process.env.RAZORPAY_KEY_SECRET || 'OZdye2d48zaLY1gSko96eJsX'
 });
+
+const getOrCreateCustomerWallet = async (customerId) => {
+    let wallet = await CustomerWallet.findOne({ customerId });
+    if (!wallet) {
+        wallet = await CustomerWallet.create({ customerId, balance: 0 });
+    }
+    return wallet;
+};
+
+const getOrCreateDriverWallet = async (driverId) => {
+    let wallet = await DriverWallet.findOne({ driverId });
+    if (!wallet) {
+        wallet = await DriverWallet.create({ driverId, balance: 0 });
+    }
+    return wallet;
+};
 // ==================== CREATE PAYMENT ORDER ====================
 export const createPaymentOrder = async (req, res) => {
     try {
@@ -318,9 +337,8 @@ export const getPaymentHistory = async (req, res) => {
         const skip = (page - 1) * limit;
 
         // Fetch wallet transactions
-        const walletTransactions = await WalletTransaction.find({ 
-            userId: customerId, 
-            userType: 'Customer' 
+        const walletTransactions = await CustomerWalletTransaction.find({ 
+            customerId 
         });
 
         // Fetch ride payments
@@ -423,18 +441,27 @@ export const handleRazorpayWebhook = async (req, res) => {
                 // Check if this is a wallet top-up
                 if (paymentEntity.notes && paymentEntity.notes.type === 'wallet_topup') {
                     console.log('💳 Processing Wallet Top-up webhook');
-                    const transaction = await WalletTransaction.findOne({ transactionId: orderId });
+                    
+                    let transaction = await CustomerWalletTransaction.findOne({ transactionId: orderId });
+                    let isCustomer = true;
+                    
+                    if (!transaction) {
+                        transaction = await DriverWalletTransaction.findOne({ transactionId: orderId });
+                        isCustomer = false;
+                    }
                     
                     if (transaction && transaction.status === 'pending') {
                         transaction.status = 'completed';
                         await transaction.save();
                         
-                        const userModel = transaction.userType === 'Customer' ? Customer : Driver;
-                        await userModel.findByIdAndUpdate(
-                            transaction.userId,
-                            { $inc: { walletBalance: transaction.amount } }
+                        const walletModel = isCustomer ? CustomerWallet : DriverWallet;
+                        const walletQuery = isCustomer ? { customerId: transaction.customerId } : { driverId: transaction.driverId };
+                        
+                        await walletModel.findOneAndUpdate(
+                            walletQuery,
+                            { $inc: { balance: transaction.amount } }
                         );
-                        console.log(`✅ Wallet balance updated for ${transaction.userType}:`, transaction.userId);
+                        console.log(`✅ Wallet balance updated for ${isCustomer ? 'Customer' : 'Driver'}`);
                     }
                     break;
                 }
@@ -494,7 +521,11 @@ export const handleRazorpayWebhook = async (req, res) => {
                 // Check if this is a wallet top-up failure
                 if (failedPayment.notes && failedPayment.notes.type === 'wallet_topup') {
                     console.log('💳 Wallet Top-up failed webhook');
-                    const failedTx = await WalletTransaction.findOne({ transactionId: failedOrderId });
+                    let failedTx = await CustomerWalletTransaction.findOne({ transactionId: failedOrderId });
+                    if (!failedTx) {
+                        failedTx = await DriverWalletTransaction.findOne({ transactionId: failedOrderId });
+                    }
+
                     if (failedTx && failedTx.status === 'pending') {
                         failedTx.status = 'failed';
                         await failedTx.save();

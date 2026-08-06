@@ -1,7 +1,10 @@
 import Razorpay from 'razorpay';
 import axios from 'axios';
 import crypto from 'crypto';
-import WalletTransaction from '../models/WalletTransaction.js';
+import CustomerWalletTransaction from '../models/CustomerWalletTransaction.js';
+import DriverWalletTransaction from '../models/DriverWalletTransaction.js';
+import CustomerWallet from '../models/CustomerWallet.js';
+import DriverWallet from '../models/DriverWallet.js';
 import Customer from '../models/Customer.js';
 import Driver from '../models/Driver.js';
 import DriverApplication from '../models/DriverApplication.js';
@@ -12,6 +15,22 @@ const razorpay = new Razorpay({
     key_id: process.env.RAZORPAY_KEY_ID || 'rzp_live_ST0TZQUt1IwsqU',
     key_secret: process.env.RAZORPAY_KEY_SECRET || 'OZdye2d48zaLY1gSko96eJsX'
 });
+
+const getOrCreateCustomerWallet = async (customerId) => {
+    let wallet = await CustomerWallet.findOne({ customerId });
+    if (!wallet) {
+        wallet = await CustomerWallet.create({ customerId, balance: 0 });
+    }
+    return wallet;
+};
+
+const getOrCreateDriverWallet = async (driverId) => {
+    let wallet = await DriverWallet.findOne({ driverId });
+    if (!wallet) {
+        wallet = await DriverWallet.create({ driverId, balance: 0 });
+    }
+    return wallet;
+};
 
 const hasCompleteBankDetails = (bankDetails) => (
     !!bankDetails?.accountHolderName &&
@@ -30,13 +49,13 @@ const getDriverBankDetails = async (driver) => {
     return application?.bankDetails || null;
 };
 
-const getWithdrawalUserAndBank = async (transaction) => {
-    if (transaction.userType === 'Customer') {
-        const customer = await Customer.findById(transaction.userId);
+const getWithdrawalUserAndBank = async (transaction, isCustomerTransaction) => {
+    if (isCustomerTransaction) {
+        const customer = await Customer.findById(transaction.customerId);
         return { user: customer, bankDetails: customer?.bankDetails || null };
     }
 
-    const driver = await Driver.findById(transaction.userId);
+    const driver = await Driver.findById(transaction.driverId);
     const bankDetails = driver ? await getDriverBankDetails(driver) : null;
     return { user: driver, bankDetails };
 };
@@ -55,11 +74,11 @@ const createRazorpayXPayout = async ({ transaction, user, bankDetails, mode = 'I
         name: user.name || bankDetails.accountHolderName,
         email: user.email || undefined,
         contact: user.phone || undefined,
-        type: transaction.userType === 'Driver' ? 'vendor' : 'customer',
-        reference_id: `${transaction.userType}_${user._id}`,
+        type: isCustomerTransaction ? 'customer' : 'vendor',
+        reference_id: `${isCustomerTransaction ? 'Customer' : 'Driver'}_${user._id}`,
         notes: {
             userId: String(user._id),
-            userType: transaction.userType
+            userType: isCustomerTransaction ? 'Customer' : 'Driver'
         }
     };
 
@@ -85,7 +104,7 @@ const createRazorpayXPayout = async ({ transaction, user, bankDetails, mode = 'I
         narration: 'GoDelivo withdrawal',
         notes: {
             userId: String(user._id),
-            userType: transaction.userType,
+            userType: isCustomerTransaction ? 'Customer' : 'Driver',
             transactionId: String(transaction._id)
         }
     }, {
@@ -115,22 +134,27 @@ export const getWalletBalance = async (req, res) => {
 
         const userModel = isCustomer ? Customer : Driver;
 
+        const TransactionModel = isCustomer ? CustomerWalletTransaction : DriverWalletTransaction;
+
         // Find user to get balance
         const user = await userModel.findById(userId);
         if (!user) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
 
+        const wallet = isCustomer 
+            ? await getOrCreateCustomerWallet(userId)
+            : await getOrCreateDriverWallet(userId);
+
         // Get recent transactions
-        const transactions = await WalletTransaction.find({
-            userId,
-            userType
-        }).sort({ createdAt: -1 }).limit(20);
+        const transactions = await TransactionModel.find(
+            isCustomer ? { customerId: userId } : { driverId: userId }
+        ).sort({ createdAt: -1 }).limit(20);
 
         res.json({
             success: true,
             data: {
-                balance: user.walletBalance || 0,
+                balance: wallet.balance,
                 transactions
             }
         });
@@ -174,10 +198,11 @@ export const createWalletOrder = async (req, res) => {
 
         const order = await razorpay.orders.create(options);
 
+        const TransactionModel = isCustomer ? CustomerWalletTransaction : DriverWalletTransaction;
+
         // Create a pending transaction using the Razorpay Order ID as transactionId
-        const transaction = new WalletTransaction({
-            userId,
-            userType,
+        const transaction = new TransactionModel({
+            [isCustomer ? 'customerId' : 'driverId']: userId,
             amount,
             type: 'credit',
             description: 'Wallet Top-up via Razorpay',
@@ -225,62 +250,74 @@ export const verifyWalletPayment = async (req, res) => {
         }
 
         // Find the pending transaction via razorpay_order_id
-        const transaction = await WalletTransaction.findOne({
+        let transaction = await CustomerWalletTransaction.findOne({
             transactionId: razorpay_order_id
         });
+        let isCustomerTransaction = true;
+
+        if (!transaction) {
+            transaction = await DriverWalletTransaction.findOne({
+                transactionId: razorpay_order_id
+            });
+            isCustomerTransaction = false;
+        }
 
         if (!transaction) {
             return res.status(404).json({ success: false, message: 'Transaction record not found' });
         }
 
+        const walletModel = isCustomerTransaction ? CustomerWallet : DriverWallet;
+        const walletIdField = isCustomerTransaction ? { customerId: transaction.customerId } : { driverId: transaction.driverId };
+
         // If already processed (e.g. duplicate webhook / retry), return success with current balance
         if (transaction.status === 'completed') {
-            const userModel = transaction.userType === 'Customer' ? Customer : Driver;
-            const user = await userModel.findById(transaction.userId);
+            const wallet = await walletModel.findOne(walletIdField);
             return res.json({
                 success: true,
                 message: 'Transaction already processed',
                 data: {
                     amountAdded: transaction.amount,
-                    newBalance: user?.walletBalance ?? transaction.newBalance,
+                    newBalance: wallet?.balance ?? transaction.newBalance,
                     transactionId: razorpay_payment_id
                 }
             });
         }
 
-        const userModel = transaction.userType === 'Customer' ? Customer : Driver;
-
         // Capture previous balance BEFORE updating wallet
-        const userBefore = await userModel.findById(transaction.userId);
-        if (!userBefore) {
-            return res.status(404).json({ success: false, message: 'User not found' });
+        const walletBefore = await walletModel.findOne(walletIdField);
+        if (!walletBefore) {
+            return res.status(404).json({ success: false, message: 'Wallet not found' });
         }
-        const previousBalance = userBefore.walletBalance || 0;
+        const previousBalance = walletBefore.balance || 0;
 
         // Add amount to user's wallet
-        const updatedUser = await userModel.findByIdAndUpdate(
-            transaction.userId,
-            { $inc: { walletBalance: transaction.amount } },
+        const updatedWallet = await walletModel.findOneAndUpdate(
+            walletIdField,
+            { $inc: { balance: transaction.amount } },
             { new: true }
         );
 
         // Mark transaction complete and record ledger details in a SINGLE save
         transaction.status = 'completed';
         transaction.previousBalance = previousBalance;
-        transaction.newBalance = updatedUser.walletBalance;
+        transaction.newBalance = updatedWallet.balance;
         transaction.transactionCategory = 'wallet_recharge';
         await transaction.save();
 
         // Check for unblocking driver if balance improves
-        if (transaction.userType === 'Driver' && updatedUser.isBlocked && updatedUser.blockReason === 'due_limit_exceeded') {
-            const dueLimits = { bike: 300, scooty: 300, auto: 700, mini_3w: 700, e_loader: 700, car: 700, tata_ace: 700, mini_truck: 700, truck: 700 };
-            const vType = (updatedUser.vehicleType || 'bike').toLowerCase();
-            const limit = dueLimits[vType] || 300;
+        if (!isCustomerTransaction) {
+            const driverId = transaction.driverId;
+            const updatedUser = await Driver.findById(driverId);
+            if (updatedUser && updatedUser.isBlocked && updatedUser.blockReason === 'due_limit_exceeded') {
+                const dueLimits = { bike: 300, scooty: 300, auto: 700, mini_3w: 700, e_loader: 700, car: 700, tata_ace: 700, mini_truck: 700, truck: 700 };
+                const vType = (updatedUser.vehicleType || 'bike').toLowerCase();
+                const limit = dueLimits[vType] || 300;
 
-            if (updatedUser.walletBalance > -limit) {
-                updatedUser.isBlocked = false;
-                updatedUser.blockReason = null;
-                await updatedUser.save();
+                if (updatedWallet.balance > -limit) {
+                    updatedUser.isBlocked = false;
+                    updatedUser.blockReason = null;
+                    await updatedUser.save();
+                }
             }
         }
 
@@ -289,7 +326,7 @@ export const verifyWalletPayment = async (req, res) => {
             message: 'Wallet balance updated successfully',
             data: {
                 amountAdded: transaction.amount,
-                newBalance: updatedUser.walletBalance,
+                newBalance: updatedWallet.balance,
                 transactionId: razorpay_payment_id
             }
         });
@@ -328,27 +365,28 @@ export const requestWithdrawal = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Bank details must be verified before withdrawal' });
         }
 
+        const wallet = await getOrCreateDriverWallet(driverId);
+
         // Check if driver has sufficient positive balance
-        if (driver.walletBalance < amount) {
-            return res.status(400).json({ success: false, message: `Insufficient balance. Your withdrawable balance is ₹${Math.max(0, driver.walletBalance)}` });
+        if (wallet.balance < amount) {
+            return res.status(400).json({ success: false, message: `Insufficient balance. Your withdrawable balance is ₹${Math.max(0, wallet.balance)}` });
         }
 
-        const previousBalance = driver.walletBalance;
+        const previousBalance = wallet.balance;
         
         // Deduct from wallet immediately
-        driver.walletBalance -= amount;
-        await driver.save();
+        wallet.balance -= amount;
+        await wallet.save();
 
         // Create transaction record
-        const transaction = new WalletTransaction({
-            userId: driver._id,
-            userType: 'Driver',
+        const transaction = new DriverWalletTransaction({
+            driverId: driver._id,
             amount: -amount,
             type: 'debit',
             transactionCategory: 'withdrawal',
             description: 'Withdrawal request',
             previousBalance: previousBalance,
-            newBalance: driver.walletBalance,
+            newBalance: wallet.balance,
             status: 'pending' // pending until admin approves/processes
         });
         await transaction.save();
@@ -359,7 +397,7 @@ export const requestWithdrawal = async (req, res) => {
             data: {
                 transactionId: transaction._id,
                 amountWithdrawn: amount,
-                newBalance: driver.walletBalance
+                newBalance: wallet.balance
             }
         });
 
@@ -392,27 +430,28 @@ export const requestCustomerWithdrawal = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Complete bank details are required before withdrawal' });
         }
 
+        const wallet = await getOrCreateCustomerWallet(customerId);
+
         // Check if customer has sufficient positive balance
-        if (customer.walletBalance < amount) {
-            return res.status(400).json({ success: false, message: `Insufficient balance. Your withdrawable balance is ₹${Math.max(0, customer.walletBalance)}` });
+        if (wallet.balance < amount) {
+            return res.status(400).json({ success: false, message: `Insufficient balance. Your withdrawable balance is ₹${Math.max(0, wallet.balance)}` });
         }
 
-        const previousBalance = customer.walletBalance;
+        const previousBalance = wallet.balance;
         
         // Deduct from wallet immediately
-        customer.walletBalance -= amount;
-        await customer.save();
+        wallet.balance -= amount;
+        await wallet.save();
 
         // Create transaction record
-        const transaction = new WalletTransaction({
-            userId: customer._id,
-            userType: 'Customer',
+        const transaction = new CustomerWalletTransaction({
+            customerId: customer._id,
             amount: -amount,
             type: 'debit',
             transactionCategory: 'withdrawal',
             description: 'Withdrawal request',
             previousBalance: previousBalance,
-            newBalance: customer.walletBalance,
+            newBalance: wallet.balance,
             status: 'pending' // pending until admin approves/processes
         });
         await transaction.save();
@@ -423,7 +462,7 @@ export const requestCustomerWithdrawal = async (req, res) => {
             data: {
                 transactionId: transaction._id,
                 amountWithdrawn: amount,
-                newBalance: customer.walletBalance
+                newBalance: wallet.balance
             }
         });
 
@@ -506,15 +545,26 @@ export const getAdminWithdrawals = async (req, res) => {
         const pageNum = parseInt(page, 10) || 1;
         const limitNum = parseInt(limit, 10) || 20;
 
-        const [transactions, total] = await Promise.all([
-            WalletTransaction.find(query).sort({ createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum).lean(),
-            WalletTransaction.countDocuments(query)
+        const [customerTransactions, driverTransactions, customerTotal, driverTotal] = await Promise.all([
+            CustomerWalletTransaction.find(query).sort({ createdAt: -1 }).limit(pageNum * limitNum).lean(),
+            DriverWalletTransaction.find(query).sort({ createdAt: -1 }).limit(pageNum * limitNum).lean(),
+            CustomerWalletTransaction.countDocuments(query),
+            DriverWalletTransaction.countDocuments(query)
         ]);
 
+        const total = customerTotal + driverTotal;
+        const allTransactions = [
+            ...customerTransactions.map(t => ({ ...t, isCustomerTransaction: true })),
+            ...driverTransactions.map(t => ({ ...t, isCustomerTransaction: false }))
+        ].sort((a, b) => b.createdAt - a.createdAt);
+
+        const transactions = allTransactions.slice((pageNum - 1) * limitNum, pageNum * limitNum);
+
         const data = await Promise.all(transactions.map(async (transaction) => {
-            const { user, bankDetails } = await getWithdrawalUserAndBank(transaction);
+            const { user, bankDetails } = await getWithdrawalUserAndBank(transaction, transaction.isCustomerTransaction);
             return {
                 ...transaction,
+                userType: transaction.isCustomerTransaction ? 'Customer' : 'Driver',
                 requestedAmount: Math.abs(transaction.amount),
                 user: user ? {
                     id: user._id,
@@ -555,7 +605,7 @@ export const approveWithdrawal = async (req, res) => {
         const { id } = req.params;
         const { mode = 'IMPS', purpose = 'payout' } = req.body;
 
-        const transaction = await WalletTransaction.findOneAndUpdate(
+        let transaction = await CustomerWalletTransaction.findOneAndUpdate(
             { _id: id, transactionCategory: 'withdrawal', status: 'pending' },
             {
                 $set: {
@@ -566,20 +616,40 @@ export const approveWithdrawal = async (req, res) => {
             },
             { new: true }
         );
+        let isCustomerTransaction = true;
+
         if (!transaction) {
-            const existing = await WalletTransaction.findOne({ _id: id, transactionCategory: 'withdrawal' }).select('status');
+            transaction = await DriverWalletTransaction.findOneAndUpdate(
+                { _id: id, transactionCategory: 'withdrawal', status: 'pending' },
+                {
+                    $set: {
+                        status: 'processing',
+                        'payoutDetails.approvedAt': new Date(),
+                        'payoutDetails.approvedBy': req.adminId
+                    }
+                },
+                { new: true }
+            );
+            isCustomerTransaction = false;
+        }
+
+        if (!transaction) {
+            const existingCustomer = await CustomerWalletTransaction.findOne({ _id: id, transactionCategory: 'withdrawal' }).select('status');
+            const existingDriver = await DriverWalletTransaction.findOne({ _id: id, transactionCategory: 'withdrawal' }).select('status');
+            const existing = existingCustomer || existingDriver;
+            
             return res.status(existing ? 400 : 404).json({
                 success: false,
                 message: existing ? `Withdrawal is already ${existing.status}` : 'Withdrawal request not found'
             });
         }
 
-        const { user, bankDetails } = await getWithdrawalUserAndBank(transaction);
+        const { user, bankDetails } = await getWithdrawalUserAndBank(transaction, isCustomerTransaction);
         if (!user) {
             transaction.status = 'pending';
-            transaction.payoutDetails.failureReason = `${transaction.userType} not found`;
+            transaction.payoutDetails.failureReason = `${isCustomerTransaction ? 'Customer' : 'Driver'} not found`;
             await transaction.save();
-            return res.status(404).json({ success: false, message: `${transaction.userType} not found` });
+            return res.status(404).json({ success: false, message: `${isCustomerTransaction ? 'Customer' : 'Driver'} not found` });
         }
 
         if (!hasCompleteBankDetails(bankDetails)) {
@@ -622,17 +692,24 @@ export const approveWithdrawal = async (req, res) => {
         });
     } catch (error) {
         console.error('Approve withdrawal error:', error.response?.data || error.message);
-        if (req.params?.id) {
-            await WalletTransaction.findOneAndUpdate(
-                { _id: req.params.id, transactionCategory: 'withdrawal', status: 'processing' },
-                {
+            if (req.params?.id) {
+                const revertData = {
                     $set: {
                         status: 'pending',
                         'payoutDetails.failureReason': error.response?.data?.error?.description || error.message
                     }
+                };
+                let reverted = await CustomerWalletTransaction.findOneAndUpdate(
+                    { _id: req.params.id, transactionCategory: 'withdrawal', status: 'processing' },
+                    revertData
+                );
+                if (!reverted) {
+                    await DriverWalletTransaction.findOneAndUpdate(
+                        { _id: req.params.id, transactionCategory: 'withdrawal', status: 'processing' },
+                        revertData
+                    );
                 }
-            );
-        }
+            }
         res.status(500).json({
             success: false,
             message: error.response?.data?.error?.description || error.message || 'Failed to approve withdrawal'
@@ -645,7 +722,14 @@ export const rejectWithdrawal = async (req, res) => {
         const { id } = req.params;
         const { reason = 'Rejected by admin' } = req.body;
 
-        const transaction = await WalletTransaction.findOne({ _id: id, transactionCategory: 'withdrawal' });
+        let transaction = await CustomerWalletTransaction.findOne({ _id: id, transactionCategory: 'withdrawal' });
+        let isCustomerTransaction = true;
+        
+        if (!transaction) {
+            transaction = await DriverWalletTransaction.findOne({ _id: id, transactionCategory: 'withdrawal' });
+            isCustomerTransaction = false;
+        }
+
         if (!transaction) {
             return res.status(404).json({ success: false, message: 'Withdrawal request not found' });
         }
@@ -654,17 +738,19 @@ export const rejectWithdrawal = async (req, res) => {
             return res.status(400).json({ success: false, message: `Withdrawal is already ${transaction.status}` });
         }
 
-        const userModel = transaction.userType === 'Customer' ? Customer : Driver;
-        const user = await userModel.findById(transaction.userId);
-        if (!user) {
-            return res.status(404).json({ success: false, message: `${transaction.userType} not found` });
+        const walletModel = isCustomerTransaction ? CustomerWallet : DriverWallet;
+        const walletIdField = isCustomerTransaction ? { customerId: transaction.customerId } : { driverId: transaction.driverId };
+        
+        const wallet = await walletModel.findOne(walletIdField);
+        if (!wallet) {
+            return res.status(404).json({ success: false, message: `Wallet not found` });
         }
 
-        user.walletBalance += Math.abs(transaction.amount);
-        await user.save();
+        wallet.balance += Math.abs(transaction.amount);
+        await wallet.save();
 
         transaction.status = 'failed';
-        transaction.newBalance = user.walletBalance;
+        transaction.newBalance = wallet.balance;
         transaction.payoutDetails = transaction.payoutDetails || {};
         transaction.payoutDetails.rejectedAt = new Date();
         transaction.payoutDetails.rejectedBy = req.adminId;
@@ -676,7 +762,7 @@ export const rejectWithdrawal = async (req, res) => {
             message: 'Withdrawal rejected and amount returned to wallet',
             data: {
                 transaction,
-                newBalance: user.walletBalance
+                newBalance: wallet.balance
             }
         });
     } catch (error) {

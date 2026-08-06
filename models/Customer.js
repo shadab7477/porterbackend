@@ -30,10 +30,6 @@ const customerSchema = new mongoose.Schema({
     trim: true,
     lowercase: true
   },
-  walletBalance: {
-    type: Number,
-    default: 0
-  },
   bankDetails: {
     type: bankDetailsSchema,
     default: null
