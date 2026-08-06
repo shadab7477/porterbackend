@@ -2198,7 +2198,7 @@ export const trackRide = async (req, res) => {
     const ride = await Ride.findOne({
       rideId,
       'customer.customerId': customerId,
-      status: { $in: ['driver_assigned', 'driver_arrived', 'in_progress'] }
+      status: { $in: ['searching', 'accepted', 'driver_assigned', 'driver_arrived', 'in_progress', 'picking_up'] }
     }).populate('driver.driverId');
 
     if (!ride) {
@@ -2259,13 +2259,15 @@ export const trackRide = async (req, res) => {
         totalStops: ride.dropLocations?.length || 1,
         currentDropIndex: ride.currentDropIndex || 0,
         legDistances: ride.legDistances || [],
-        driver: {
+        driver: ride.driver.name ? {
+          driverId: ride.driver.driverId?._id || ride.driver.driverId,
           name: ride.driver.name,
           vehicleType: ride.driver.vehicleType,
           vehicleNumber: ride.driver.vehicleNumber,
           rating: ride.driver.rating,
-          phone: ride.driver.phone
-        },
+          phone: ride.driver.phone,
+          profileImage: ride.driver.profileImage || null,
+        } : null,
         tracking: ride.tracking.slice(-10)
       }
     });

@@ -281,7 +281,9 @@ export const updateCustomerProfile = async (req, res) => {
   try {
     const { name, email, bankDetails, savedAddresses } = req.body;
 
-    const updateData = { name, email };
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (email !== undefined) updateData.email = email;
     if (savedAddresses) {
       updateData.savedAddresses = savedAddresses;
     }
