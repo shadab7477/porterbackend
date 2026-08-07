@@ -10,6 +10,10 @@ const notificationSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  imageUrl: {
+    type: String,
+    default: null
+  },
   recipientType: {
     type: String,
     enum: ['user', 'driver', 'all'],

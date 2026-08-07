@@ -1,5 +1,6 @@
 import express from 'express';
 import notificationController from '../controllers/notificationController.js';
+import { upload, handleMulterError } from '../middleware/uploadMiddleware.js';
 
 const router = express.Router();
 
@@ -8,7 +9,7 @@ const router = express.Router();
 // @route   POST /api/admin/notifications/send
 // @desc    Send notification to users/drivers
 // @access  Private/Admin
-router.post('/send', notificationController.sendNotificationToUsers);
+router.post('/send', upload.single('image'), handleMulterError, notificationController.sendNotificationToUsers);
 
 // @route   GET /api/admin/notifications/history
 // @desc    Get notification history

@@ -683,40 +683,39 @@ export const payWithWallet = async (req, res) => {
         const amount = ride.fare.finalAmount;
 
         // Get customer and check balance
-        const customer = await Customer.findById(customerId);
-        if (!customer) {
-            return res.status(404).json({ success: false, message: 'Customer not found' });
+        let customerWallet = await CustomerWallet.findOne({ customerId });
+        if (!customerWallet) {
+            customerWallet = await CustomerWallet.create({ customerId, balance: 0 });
         }
 
-        if (customer.walletBalance < amount) {
+        if (customerWallet.balance < amount) {
             return res.status(400).json({
                 success: false,
-                message: `Insufficient wallet balance. Balance: ₹${customer.walletBalance}, Required: ₹${amount}`,
-                walletBalance: customer.walletBalance,
+                message: `Insufficient wallet balance. Balance: ₹${customerWallet.balance}, Required: ₹${amount}`,
+                walletBalance: customerWallet.balance,
                 required: amount
             });
         }
 
-        const previousBalance = customer.walletBalance;
+        const previousBalance = customerWallet.balance;
 
         // Deduct from wallet
-        customer.walletBalance -= amount;
-        await customer.save();
+        customerWallet.balance -= amount;
+        await customerWallet.save();
 
         // Mark ride as paid
         ride.paymentStatus = 'completed';
         await ride.save();
 
         // Create ledger entry
-        await WalletTransaction.create({
-            userId: customerId,
-            userType: 'Customer',
+        await CustomerWalletTransaction.create({
+            customerId: customerId,
             amount: -amount,
             type: 'debit',
             transactionCategory: 'other',
             description: `Ride payment for ${rideId}`,
             previousBalance: previousBalance,
-            newBalance: customer.walletBalance,
+            newBalance: customerWallet.balance,
             orderId: ride._id,
             status: 'completed'
         });
@@ -731,7 +730,7 @@ export const payWithWallet = async (req, res) => {
             status: 'success',
             transactionId: `wallet_${rideId}`,
             paidAt: new Date(),
-            metadata: { source: 'wallet', previousBalance, newBalance: customer.walletBalance }
+            metadata: { source: 'wallet', previousBalance, newBalance: customerWallet.balance }
         });
 
         console.log(`✅ Wallet payment done for ride ${rideId}. Deducted ₹${amount}`);
@@ -754,7 +753,7 @@ export const payWithWallet = async (req, res) => {
                 rideId: ride.rideId,
                 paymentStatus: 'completed',
                 amountDeducted: amount,
-                walletBalance: customer.walletBalance
+                walletBalance: customerWallet.balance
             }
         });
 

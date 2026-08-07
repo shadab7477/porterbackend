@@ -2,6 +2,7 @@ import Notification from '../models/Notification.js';
 import Customer from '../models/Customer.js';
 import Driver from '../models/Driver.js';
 import { sendNotification } from '../utils/notificationService.js';
+import { uploadToCloudinary } from '../config/cloudinary.js';
 
 /**
  * @desc    Send notification to users/drivers
@@ -10,8 +11,28 @@ import { sendNotification } from '../utils/notificationService.js';
  */
 export const sendNotificationToUsers = async (req, res) => {
   try {
-    const { title, message, recipientType, recipientIds, data } = req.body;
-console.log(req.body);
+    let { title, message, recipientType, recipientIds, data } = req.body;
+    
+    // Parse FormData stringified arrays/objects
+    if (typeof recipientIds === 'string') {
+      try { recipientIds = JSON.parse(recipientIds); } catch (e) {}
+    }
+    if (typeof data === 'string') {
+      try { data = JSON.parse(data); } catch (e) { data = {}; }
+    }
+    if (!data) data = {};
+
+    let imageUrl = null;
+    if (req.file) {
+      try {
+        const uploadResult = await uploadToCloudinary(req.file.buffer, 'notifications');
+        imageUrl = uploadResult.url;
+      } catch (error) {
+        console.error('Failed to upload notification image:', error);
+      }
+    }
+
+    console.log(req.body);
 
     // Validate input
     if (!title || !message || !recipientType) {
@@ -101,6 +122,7 @@ console.log(req.body);
               message,
               {
                 ...data,
+                ...(imageUrl ? { imageUrl } : {}),
                 notificationType: 'admin_sent',
                 recipientType: recipient.type,
                 recipientId: recipient.id.toString()
@@ -149,6 +171,7 @@ console.log(req.body);
     const notificationRecord = new Notification({
       title,
       message,
+      imageUrl,
       recipientType,
       recipientIds: validRecipients.map(r => r.id),
       senderId: req.adminId,

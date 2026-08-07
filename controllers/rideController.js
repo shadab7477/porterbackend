@@ -1696,7 +1696,7 @@ export const completeRide = async (req, res) => {
       commission: commissionAmount,
       totalFare: ride.fare.finalAmount,
       paymentMethod: ride.paymentMethod,
-      walletBalance: driver.walletBalance,
+      walletBalance: driverWallet.balance,
       isBlocked: driver.isBlocked || false
     });
 
