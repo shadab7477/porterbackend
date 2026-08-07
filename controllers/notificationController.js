@@ -84,45 +84,52 @@ console.log(req.body);
       });
     }
 
-    // Send notifications (send to only one recipient to ensure single notification)
+    // Send notifications to all valid recipients
     const notificationResults = [];
     const failedNotifications = [];
 
     if (validRecipients.length > 0) {
-      const recipient = validRecipients[0];
-      try {
-        const result = await sendNotification(
-          recipient.fcmToken,
-          title,
-          message,
-          {
-            ...data,
-            notificationType: 'admin_sent',
-            recipientType: recipient.type,
-            recipientId: recipient.id.toString()
-          }
-        );
+      // Process in batches to avoid blocking
+      const BATCH_SIZE = 50;
+      for (let i = 0; i < validRecipients.length; i += BATCH_SIZE) {
+        const batch = validRecipients.slice(i, i + BATCH_SIZE);
+        const promises = batch.map(async (recipient) => {
+          try {
+            const result = await sendNotification(
+              recipient.fcmToken,
+              title,
+              message,
+              {
+                ...data,
+                notificationType: 'admin_sent',
+                recipientType: recipient.type,
+                recipientId: recipient.id.toString()
+              }
+            );
 
-        if (result.success) {
-          notificationResults.push({
-            recipientId: recipient.id,
-            recipientType: recipient.type,
-            success: true,
-            messageId: result.messageId
-          });
-        } else {
-          failedNotifications.push({
-            recipientId: recipient.id,
-            recipientType: recipient.type,
-            error: result.error || result.message
-          });
-        }
-      } catch (error) {
-        failedNotifications.push({
-          recipientId: recipient.id,
-          recipientType: recipient.type,
-          error: error.message
+            if (result.success) {
+              notificationResults.push({
+                recipientId: recipient.id,
+                recipientType: recipient.type,
+                success: true,
+                messageId: result.messageId
+              });
+            } else {
+              failedNotifications.push({
+                recipientId: recipient.id,
+                recipientType: recipient.type,
+                error: result.error || result.message
+              });
+            }
+          } catch (error) {
+            failedNotifications.push({
+              recipientId: recipient.id,
+              recipientType: recipient.type,
+              error: error.message
+            });
+          }
         });
+        await Promise.all(promises);
       }
     }
 
@@ -131,7 +138,7 @@ console.log(req.body);
       title,
       message,
       recipientType,
-      recipientIds: validRecipients.length > 0 ? [validRecipients[0].id] : [],
+      recipientIds: validRecipients.map(r => r.id),
       senderId: req.adminId,
       data: {
         ...data,
