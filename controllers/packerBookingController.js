@@ -8,15 +8,73 @@ const generateBookingId = () => {
 
 export const createBooking = async (req, res) => {
   try {
+    const customerId = req.customerId; // Injected by customerAuthMiddleware
     const {
-      customerId,
-      locations,
-      distance,
+      moveType,
+      pickupAddress,
+      dropAddress,
       inventory,
-      services,
-      pricing,
-      schedule
+      selectedDate,
+      timeSlot,
+      pickupFloor,
+      dropFloor,
+      hasElevatorPickup,
+      hasElevatorDrop,
+      specialInstructions,
+      needsPacking,
+      hasFragileItems,
+      needsDisassembly,
+      paymentMethod,
+      pricing
     } = req.body;
+
+    // Transform locations
+    const locations = {
+      pickup: {
+        address: pickupAddress?.address || 'N/A',
+        coordinates: [pickupAddress?.lng || 0, pickupAddress?.lat || 0],
+        floor: pickupFloor || 0,
+        hasLift: hasElevatorPickup || false
+      },
+      dropoff: {
+        address: dropAddress?.address || 'N/A',
+        coordinates: [dropAddress?.lng || 0, dropAddress?.lat || 0],
+        floor: dropFloor || 0,
+        hasLift: hasElevatorDrop || false
+      }
+    };
+
+    // Transform inventory
+    const formatName = (str) => str.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    const inventoryArray = Object.keys(inventory || {}).map(key => ({
+      itemId: key,
+      name: formatName(key),
+      qty: inventory[key],
+      fragile: hasFragileItems || false
+    }));
+
+    // Transform services
+    const services = {
+      packingType: needsPacking ? 'multi-layer' : 'none',
+      loadingUnloading: true,
+      assembly: needsDisassembly || false
+    };
+
+    // Transform pricing
+    const backendPricing = {
+      itemCost: pricing?.itemCharges || 0,
+      extraCost: (pricing?.floorCharges || 0) + (pricing?.fragileCharges || 0) + (pricing?.packingCharges || 0) + (pricing?.disassemblyCharges || 0) + (pricing?.gst || 0),
+      distanceCharge: pricing?.base || 0,
+      serviceCharge: 0,
+      total: pricing?.total || 0,
+      bookingAmountPaid: paymentMethod === 'cash' ? 0 : 500
+    };
+
+    // Transform schedule
+    const schedule = {
+      date: new Date(selectedDate),
+      timeSlot: timeSlot || 'morning'
+    };
 
     // 1. Lock Availability: Verify schedule limits
     const existingBookings = await PackerBooking.countDocuments({
@@ -36,14 +94,14 @@ export const createBooking = async (req, res) => {
       bookingId,
       customerId,
       locations,
-      distance,
-      inventory,
+      distance: 0, // frontend doesn't send distance currently
+      inventory: inventoryArray,
       services,
-      pricing,
+      pricing: backendPricing,
       schedule,
-      paymentStatus: 'pending',
+      paymentStatus: paymentMethod === 'cash' ? 'pending' : 'pending',
       status: 'pending',
-      logs: [{ status: 'Created', note: 'Booking initiated, awaiting deposit.' }]
+      logs: [{ status: 'Created', note: `Booking initiated. Instructions: ${specialInstructions || 'None'}` }]
     });
 
     await newBooking.save();
@@ -54,10 +112,11 @@ export const createBooking = async (req, res) => {
 
     res.status(201).json({
       success: true,
+      data: { bookingId: newBooking.bookingId },
       booking: newBooking,
       paymentOrder: {
         id: stubRazorpayOrderId,
-        amount: pricing.bookingAmountPaid || 500,
+        amount: backendPricing.bookingAmountPaid || 500,
         currency: 'INR'
       }
     });
@@ -90,7 +149,6 @@ export const getAdminBookings = async (req, res) => {
     const bookings = await PackerBooking.find()
       .populate('customerId', 'name phone email')
       .populate('driverId', 'name phone')
-      .populate('inventory.itemId', 'name')
       .sort({ createdAt: -1 })
       .lean();
 

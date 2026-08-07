@@ -12,6 +12,7 @@ import initializeSockets from './sockets/socketHandler.js';
 import { initializeSupportSockets } from './sockets/supportSocketHandler.js';
 import { initializeRideTrackingSockets } from './sockets/rideTrackingSocket.js';
 import { initializePackerSockets } from './sockets/packerSocketHandler.js';
+import { initializeCronJobs } from './services/cronService.js';
 
 // Routes
 import driverRoutes from './routes/driverRoutes.js';
@@ -130,6 +131,9 @@ initializeSockets(io);
 initializeSupportSockets(io);
 initializePackerSockets(io);
 
+// Initialize scheduled background jobs
+initializeCronJobs();
+
 app.set('io', io);
 
 
@@ -163,7 +167,7 @@ app.use('/api/admin/notifications', adminNotificationRoutes);
 app.use('/api/admin/restricted-items', adminRestrictedItemsRoutes);
 app.use('/api/admin/goods-items', adminGoodsItemsRoutes);
 app.use('/api/admin/pricing', adminPricingRoutes);
-app.use('/api/packer-bookings', packerBookingRoutes);
+app.use('/api/packers-movers', packerBookingRoutes);
 app.use('/api/merchant', merchantRoutes);
 app.use('/api/vehicles', vehicleRoutes);
 

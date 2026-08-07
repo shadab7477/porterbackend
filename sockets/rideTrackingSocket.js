@@ -1,8 +1,9 @@
-// sockets/rideTrackingSocket.js
 import Driver from '../models/Driver.js';
 import Ride from '../models/Ride.js';
 import Customer from '../models/Customer.js';
 import ChatMessage from '../models/ChatMessage.js';
+import Notification from '../models/Notification.js';
+import { sendNotification } from '../utils/notificationService.js';
 import { logSocketFlow } from '../utils/rideLogger.js';
 
 // Store active tracking sessions
@@ -1188,12 +1189,44 @@ export const initializeRideTrackingSockets = (io) => {
               customerId: session.customerId,
               fare
             });
-            // await sendPushNotification(customer.fcmToken, {
-            //   title: 'Ride Completed',
-            //   body: `Your ride is complete. Total fare: ₹${fare}`,
-            //   data: { rideId, type: 'ride_completed', fare: fare.toString() }
-            // });
+            
+            // Send push notification for rating
+            await sendNotification(
+              customer.fcmToken,
+              'Ride Completed',
+              'How was your last experience? Rate us to help improve our service!',
+              { rideId, type: 'ride_completed', fare: fare.toString() }
+            );
+
+            // Store notification in DB
+            await Notification.create({
+              title: 'Ride Completed',
+              message: 'How was your last experience? Rate us to help improve our service!',
+              recipientType: 'user',
+              recipientIds: [customer._id],
+              data: { rideId, type: 'ride_completed', fare: fare.toString() }
+            });
           }
+        }
+        
+        // Notify driver about earnings
+        if (updatedDriver && updatedDriver.fcmToken) {
+          logWithTimestamp('debug', `Sending completion notification to driver`, { driverId });
+          
+          await sendNotification(
+            updatedDriver.fcmToken,
+            'Ride Completed',
+            `Great job! You earned ₹${fare} for this ride.`,
+            { rideId, type: 'ride_completed', fare: fare.toString() }
+          );
+
+          await Notification.create({
+            title: 'Ride Completed',
+            message: `Great job! You earned ₹${fare} for this ride.`,
+            recipientType: 'driver',
+            recipientIds: [updatedDriver._id],
+            data: { rideId, type: 'ride_completed', fare: fare.toString() }
+          });
         }
 
         // Clean up tracking session after delay

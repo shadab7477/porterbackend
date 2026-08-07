@@ -8,7 +8,8 @@ const locationSchema = new mongoose.Schema({
 }, { _id: false });
 
 const itemSchema = new mongoose.Schema({
-  itemId: { type: mongoose.Schema.Types.ObjectId, ref: 'SubCategory', required: true },
+  itemId: { type: String, required: true },
+  name: { type: String, required: true },
   qty: { type: Number, required: true, default: 1 },
   fragile: { type: Boolean, default: false }
 }, { _id: false });
