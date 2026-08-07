@@ -115,10 +115,22 @@ console.log(req.body);
                 messageId: result.messageId
               });
             } else {
+              const errorMessage = result.error || result.message || '';
+              
+              // If token is dead/unregistered, clean it up from the database immediately
+              if (errorMessage.includes('NotRegistered') || errorMessage.includes('registration-token-not-registered')) {
+                console.log(`[Cleanup] Removing dead FCM token for ${recipient.type} ${recipient.id}`);
+                if (recipient.type === 'user') {
+                  await Customer.findByIdAndUpdate(recipient.id, { $unset: { fcmToken: 1 } }).catch(e => console.error(e));
+                } else if (recipient.type === 'driver') {
+                  await Driver.findByIdAndUpdate(recipient.id, { $unset: { fcmToken: 1 } }).catch(e => console.error(e));
+                }
+              }
+
               failedNotifications.push({
                 recipientId: recipient.id,
                 recipientType: recipient.type,
-                error: result.error || result.message
+                error: errorMessage
               });
             }
           } catch (error) {
