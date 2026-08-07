@@ -632,6 +632,7 @@ async function processRides(pendingRides, driver, driverId, driverLat, driverLon
           duration: ride.duration,
           durationText: ride.routeInfo?.durationText || `${ride.duration} mins`,
           estimatedFare: ride.fare?.total || 0,
+          paymentMethod: ride.paymentMethod,
           fareBreakdown: {
             distanceFare: ride.fare?.distanceFare || 0,
             total: ride.fare?.total || 0
@@ -1028,6 +1029,7 @@ const findNearbyDrivers = async (ride, io, radius = 5) => {
         distance: ride.distance,
         distanceText: ride.routeInfo.distanceText,
         estimatedFare: ride.fare.total,
+        paymentMethod: ride.paymentMethod,
         customerRating: ride.customer.rating,
         distanceFromDriver: etaInfo.distance,
         distanceFromDriverText: etaInfo.distanceText,
@@ -1271,6 +1273,7 @@ export const acceptRide = async (req, res) => {
         totalStops: ride.dropLocations?.length || 1,
         legDistances: ride.legDistances || [],
         estimatedFare: ride.fare.total,
+        paymentMethod: ride.paymentMethod,
         distance: ride.distance,
         distanceText: distanceText,
         eta: etaInfo.duration,
