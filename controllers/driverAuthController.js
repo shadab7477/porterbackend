@@ -145,7 +145,7 @@ export const sendOTP = async (req, res) => {
 // Verify OTP and generate token
 export const verifyOTP = async (req, res) => {
   try {
-    const { phone, otp } = req.body;
+    const { phone, otp, fcmToken } = req.body;
 
     if (!phone || !otp) {
       return res.status(400).json({
@@ -245,6 +245,7 @@ export const verifyOTP = async (req, res) => {
               vehicleNumber: existingApplication.vehicleNumber,
               isOnline: false,
               lastActive: new Date(),
+              fcmToken: fcmToken || null,
               subscription: {
                 status: isTwoWheeler ? 'pending' : 'active',
                 amount: isTwoWheeler ? 499 : 0,
@@ -252,6 +253,12 @@ export const verifyOTP = async (req, res) => {
               }
             });
             await driver.save();
+          } else {
+            // Update token for existing driver on login
+            if (fcmToken) {
+              driver.fcmToken = fcmToken;
+              await driver.save();
+            }
           }
           
           driverId = driver._id;
@@ -417,7 +424,7 @@ export const verifyOTP = async (req, res) => {
 // Driver Login (explicit login for verified drivers)
 export const driverLogin = async (req, res) => {
   try {
-    const { phone } = req.body;
+    const { phone, fcmToken } = req.body;
 
     if (!phone) {
       return res.status(400).json({
@@ -472,6 +479,7 @@ export const driverLogin = async (req, res) => {
         vehicleNumber: application.vehicleNumber,
         isOnline: false,
         lastActive: new Date(),
+        fcmToken: fcmToken || null,
         subscription: {
           status: isTwoWheeler ? 'pending' : 'active',
           amount: isTwoWheeler ? 499 : 0,
@@ -481,6 +489,9 @@ export const driverLogin = async (req, res) => {
       await driver.save();
     } else {
       driver.lastActive = new Date();
+      if (fcmToken) {
+        driver.fcmToken = fcmToken;
+      }
       await driver.save();
     }
 
