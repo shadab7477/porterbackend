@@ -1990,7 +1990,7 @@ export const cancelRide = async (req, res) => {
 export const updateRideStatus = async (req, res) => {
   try {
     const { rideId } = req.params;
-    const { status, reason, note } = req.body;
+    const { status, reason, note, paymentStatus } = req.body;
     const { userType, userId } = getAuthenticatedActor(req);
 
     if (userType !== 'admin') {
@@ -2053,7 +2053,9 @@ export const updateRideStatus = async (req, res) => {
       reason: reason || note
     });
 
-    if (status === 'completed' && !ride.paymentStatus) {
+    if (paymentStatus) {
+      ride.paymentStatus = paymentStatus;
+    } else if (status === 'completed' && !ride.paymentStatus) {
       ride.paymentStatus = ride.paymentMethod === 'cash' ? 'pending' : ride.paymentStatus;
     }
 
