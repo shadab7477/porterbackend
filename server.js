@@ -137,10 +137,30 @@ initializeCronJobs();
 app.set('io', io);
 
 
-// ================== 🧱 MIDDLEWARE ==================
+// ================== 🧱 MIDDLEWARE & LOGGING ==================
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Comprehensive HTTP Logger Middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  const { method, originalUrl, body, query, ip } = req;
+
+  // Mask sensitive fields in body before logging
+  const safeBody = { ...body };
+  if (safeBody.password) safeBody.password = '***';
+  if (safeBody.confirmPassword) safeBody.confirmPassword = '***';
+
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    const status = res.statusCode;
+    const logLevel = status >= 400 ? '🔴 [HTTP ERROR]' : '🟢 [HTTP]';
+    console.log(`${logLevel} ${method} ${originalUrl} ${status} - ${duration}ms - IP: ${ip} ${Object.keys(safeBody).length > 0 ? `- Body: ${JSON.stringify(safeBody)}` : ''}`);
+  });
+
+  next();
+});
 
 // Trust proxy (NGINX)
 app.set('trust proxy', 1);
@@ -208,10 +228,11 @@ app.get(/^\/(?!api|health|socket-test).*/, (req, res) => {
 // ================== ❌ ERROR HANDLER ==================
 
 app.use((err, req, res, next) => {
-  console.error("ERROR:", err.message);
-  res.status(500).json({
+  console.error(`💥 [CRITICAL ERROR] ${req.method} ${req.originalUrl}:`, err.stack || err.message || err);
+  res.status(err.status || 500).json({
     success: false,
-    message: err.message || 'Internal Server Error'
+    message: err.message || 'Internal Server Error',
+    error: process.env.NODE_ENV === 'development' ? err.stack : undefined
   });
 });
 

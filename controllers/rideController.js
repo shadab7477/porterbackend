@@ -308,14 +308,31 @@ const getAuthenticatedActor = (req) => {
 const emitRideStatusEvents = (io, ride, statusData) => {
   if (!io) return;
 
-  io.to(`ride:${ride.rideId}`).emit('ride:status-changed', statusData);
+  const enrichedData = {
+    ...statusData,
+    paymentMethod: ride.paymentMethod || 'cash',
+    paymentStatus: ride.paymentStatus || 'pending',
+    amount: ride.fare?.finalAmount,
+    fare: ride.fare,
+    driver: ride.driver ? {
+      driverId: ride.driver.driverId?._id || ride.driver.driverId,
+      name: ride.driver.name,
+      vehicleType: ride.driver.vehicleType,
+      vehicleNumber: ride.driver.vehicleNumber,
+      rating: ride.driver.rating,
+      phone: ride.driver.phone,
+      profileImage: ride.driver.profileImage || null
+    } : null
+  };
+
+  io.to(`ride:${ride.rideId}`).emit('ride:status-changed', enrichedData);
 
   const rideTrackingNsp = io.of('/ride-tracking');
   if (rideTrackingNsp) {
-    rideTrackingNsp.to(`ride:${ride.rideId}`).emit('ride:status-changed', statusData);
+    rideTrackingNsp.to(`ride:${ride.rideId}`).emit('ride:status-changed', enrichedData);
   }
 
-  io.of('/admin').to('admin-room').emit('ride:status-changed', statusData);
+  io.of('/admin').to('admin-room').emit('ride:status-changed', enrichedData);
 };
 
 const setDriverAvailabilityForRideStatus = async (ride, status) => {
@@ -873,7 +890,15 @@ export const requestRide = async (req, res) => {
       paymentMethod,
       paymentCollectedBy: paymentMethod === 'cash' || paymentMethod === 'wallet' ? 'customer' : paymentCollectedBy,
       paymentStatus: 'pending',
-      status: 'requested'
+      status: 'requested',
+      statusHistory: [{
+        status: 'requested',
+        previousStatus: null,
+        changedBy: 'customer',
+        changedById: customerId.toString(),
+        reason: 'Ride booked by customer',
+        changedAt: new Date()
+      }]
     });
 
     // ====== WALLET: Pre-check balance at booking time ======
@@ -966,7 +991,7 @@ const findNearbyDrivers = async (ride, io, radius = 5) => {
   try {
     const [longitude, latitude] = ride.pickupLocation.coordinates;
 
-    ride.status = 'searching';
+    ride.updateStatus('searching', { changedBy: 'system', reason: 'Searching for nearby drivers' });
     await ride.save();
 
     const nearbyDrivers = await Driver.aggregate([
@@ -991,7 +1016,7 @@ const findNearbyDrivers = async (ride, io, radius = 5) => {
     ]);
 
     if (nearbyDrivers.length === 0) {
-      ride.status = 'no_drivers';
+      ride.updateStatus('no_drivers', { changedBy: 'system', reason: 'No drivers available in area' });
       await ride.save();
 
       io.emit(`ride:${ride.rideId}:no_drivers`, {
@@ -1063,7 +1088,7 @@ const handleDriverResponseTimeout = async (ride, io) => {
     );
 
     if (acceptedDrivers.length === 0) {
-      updatedRide.status = 'no_drivers';
+      updatedRide.updateStatus('no_drivers', { changedBy: 'system', reason: 'No drivers accepted your request' });
       await updatedRide.save();
 
       io.emit(`ride:${ride.rideId}:timeout`, {
@@ -1369,9 +1394,11 @@ export const driverArrived = async (req, res) => {
     io.to(`ride:${ride.rideId}`).emit('driver:arrived', {
       rideId: ride.rideId,
       message: 'Your driver has arrived at pickup location',
-      arrivedAt: ride.driverArrivedAt
+      arrivedAt: ride.driverArrivedAt,
+      paymentMethod: ride.paymentMethod,
+      amount: ride.fare.finalAmount
     });
-    io.to(`ride:${ride.rideId}`).emit('ride:status-changed', {
+    emitRideStatusEvents(io, ride, {
       rideId: ride.rideId,
       status: 'driver_arrived',
       timestamp: new Date(),
@@ -1429,11 +1456,10 @@ export const startRide = async (req, res) => {
       });
     }
 
-    // Payment gate for ONLINE rides:
-    // If customer is paying → payment must be done before ride starts
-    // If receiver is paying → skip check here, will be enforced at completeRide
-    const customerMustPayFirst = ride.paymentMethod !== 'cash'
-      && ride.paymentCollectedBy === 'customer'
+    // Payment gate for ONLINE and WALLET rides:
+    // If payment method is online or wallet and status is not completed, block ride start
+    const customerMustPayFirst = (ride.paymentMethod === 'online' || ride.paymentMethod === 'wallet')
+      && (ride.paymentCollectedBy === 'customer' || !ride.paymentCollectedBy)
       && ride.paymentStatus !== 'completed';
 
     if (customerMustPayFirst) {
@@ -1461,18 +1487,11 @@ export const startRide = async (req, res) => {
       receiver: ride.receiver
     });
 
-    // Notify customer on default namespace ride tracking channel
-    io.to(`ride:${ride.rideId}`).emit('ride:started', {
-      rideId: ride.rideId,
-      message: 'Your ride has started',
-      startedAt: ride.rideStartedAt,
-      receiver: ride.receiver
-    });
-    io.to(`ride:${ride.rideId}`).emit('ride:status-changed', {
+    emitRideStatusEvents(io, ride, {
       rideId: ride.rideId,
       status: 'in_progress',
-      timestamp: new Date(),
-      message: 'Ride is in progress'
+      startedAt: ride.rideStartedAt,
+      message: 'Ride has started'
     });
 
     res.json({
@@ -2276,6 +2295,9 @@ export const trackRide = async (req, res) => {
       data: {
         rideId: ride.rideId,
         status: ride.status,
+        paymentStatus: ride.paymentStatus || 'pending',
+        paymentMethod: ride.paymentMethod || 'cash',
+        fare: ride.fare,
         driverLocation,
         eta,
         etaText,
