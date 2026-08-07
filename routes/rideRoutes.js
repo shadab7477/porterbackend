@@ -83,7 +83,7 @@ router.get('/fare-estimate', calculateFareEstimate);
 router.post('/request', customerAuthMiddleware, requestRide);
 router.post('/:rideId/verify-payment', customerAuthMiddleware, verifyRidePayment);
 router.get('/history', customerAuthMiddleware, getCustomerRideHistory);
-router.get('/:rideId/status', customerAuthMiddleware, getRideStatus);
+router.get('/:rideId/status', authMiddleware, getRideStatus);
 router.get('/:rideId/track', customerAuthMiddleware, trackRide);
 router.post('/:rideId/rate-driver', customerAuthMiddleware, rateDriver);
 // Add these routes to your existing rideRoutes.js
