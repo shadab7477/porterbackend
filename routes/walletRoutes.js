@@ -7,6 +7,7 @@ import {
   requestCustomerWithdrawal,
   getCustomerBankDetails,
   updateCustomerBankDetails,
+  deleteCustomerBankDetails,
   getAdminWithdrawals,
   approveWithdrawal,
   rejectWithdrawal
@@ -30,6 +31,7 @@ router.post('/customer/create-order', customerAuthMiddleware, createWalletOrder)
 router.post('/customer/verify', customerAuthMiddleware, verifyWalletPayment);
 router.get('/customer/bank-details', customerAuthMiddleware, getCustomerBankDetails);
 router.put('/customer/bank-details', customerAuthMiddleware, updateCustomerBankDetails);
+router.delete('/customer/bank-details', customerAuthMiddleware, deleteCustomerBankDetails);
 router.post('/customer/withdraw', customerAuthMiddleware, requestCustomerWithdrawal);
 
 // ==================== DRIVER ROUTES ====================

@@ -8,6 +8,7 @@ import DriverWallet from '../models/DriverWallet.js';
 import Customer from '../models/Customer.js';
 import Driver from '../models/Driver.js';
 import DriverApplication from '../models/DriverApplication.js';
+import MerchantApplication from '../models/MerchantApplication.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -482,6 +483,7 @@ export const getCustomerBankDetails = async (req, res) => {
         const bankDetails = customer.bankDetails ? {
             accountHolderName: customer.bankDetails.accountHolderName,
             accountNumber: maskAccountNumber(customer.bankDetails.accountNumber),
+            rawAccountNumber: customer.bankDetails.accountNumber,
             ifscCode: customer.bankDetails.ifscCode,
             bankName: customer.bankDetails.bankName,
             branchName: customer.bankDetails.branchName,
@@ -508,7 +510,7 @@ export const updateCustomerBankDetails = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Customer not found' });
         }
 
-        customer.bankDetails = {
+        const bankDetails = {
             accountHolderName: String(accountHolderName).trim(),
             accountNumber: String(accountNumber).trim(),
             ifscCode: String(ifscCode).trim().toUpperCase(),
@@ -516,7 +518,16 @@ export const updateCustomerBankDetails = async (req, res) => {
             branchName: branchName ? String(branchName).trim() : undefined,
             updatedAt: new Date()
         };
+
+        customer.bankDetails = bankDetails;
         await customer.save();
+
+        // Also sync to MerchantApplication if customer has a merchant application
+        if (customer.merchantApplicationId) {
+            await MerchantApplication.findByIdAndUpdate(customer.merchantApplicationId, { bankDetails });
+        } else {
+            await MerchantApplication.findOneAndUpdate({ customerId: customer._id }, { bankDetails });
+        }
 
         res.json({
             success: true,
@@ -524,6 +535,7 @@ export const updateCustomerBankDetails = async (req, res) => {
             data: {
                 accountHolderName: customer.bankDetails.accountHolderName,
                 accountNumber: maskAccountNumber(customer.bankDetails.accountNumber),
+                rawAccountNumber: customer.bankDetails.accountNumber,
                 ifscCode: customer.bankDetails.ifscCode,
                 bankName: customer.bankDetails.bankName,
                 branchName: customer.bankDetails.branchName,
@@ -533,6 +545,32 @@ export const updateCustomerBankDetails = async (req, res) => {
     } catch (error) {
         console.error('Update customer bank details error:', error);
         res.status(500).json({ success: false, message: 'Failed to update bank details' });
+    }
+};
+
+export const deleteCustomerBankDetails = async (req, res) => {
+    try {
+        const customer = await Customer.findById(req.customerId);
+        if (!customer) {
+            return res.status(404).json({ success: false, message: 'Customer not found' });
+        }
+
+        customer.bankDetails = null;
+        await customer.save();
+
+        if (customer.merchantApplicationId) {
+            await MerchantApplication.findByIdAndUpdate(customer.merchantApplicationId, { $unset: { bankDetails: 1 } });
+        } else {
+            await MerchantApplication.findOneAndUpdate({ customerId: customer._id }, { $unset: { bankDetails: 1 } });
+        }
+
+        res.json({
+            success: true,
+            message: 'Bank details deleted successfully'
+        });
+    } catch (error) {
+        console.error('Delete customer bank details error:', error);
+        res.status(500).json({ success: false, message: 'Failed to delete bank details' });
     }
 };
 
