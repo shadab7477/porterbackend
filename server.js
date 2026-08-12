@@ -46,6 +46,17 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const server = http.createServer(app);
 
+// ================== 🛡️ CRASH PROTECTION & UNHANDLED ERROR HANDLERS ==================
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 [CRITICAL] Unhandled Promise Rejection at:', promise, 'Reason:', reason?.stack || reason);
+  // Keep process alive despite unhandled promise rejections
+});
+
+process.on('uncaughtException', (err, origin) => {
+  console.error(`💥 [CRITICAL] Uncaught Exception at ${origin}:`, err?.stack || err);
+  // Keep process alive despite uncaught runtime errors
+});
+
 
 // ================== ✅ CORS CONFIG ==================
 
@@ -229,18 +240,36 @@ app.get(/^\/(?!api|health|socket-test).*/, (req, res) => {
 
 app.use((err, req, res, next) => {
   console.error(`💥 [CRITICAL ERROR] ${req.method} ${req.originalUrl}:`, err.stack || err.message || err);
-  res.status(err.status || 500).json({
-    success: false,
-    message: err.message || 'Internal Server Error',
-    error: process.env.NODE_ENV === 'development' ? err.stack : undefined
-  });
+  if (!res.headersSent) {
+    res.status(err.status || 500).json({
+      success: false,
+      message: err.message || 'Internal Server Error',
+      error: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+  }
 });
 
 
-// ================== 🚀 SERVER START ==================
+// ================== 🚀 SERVER START & SHUTDOWN ==================
 
 const PORT = process.env.PORT || 5001;
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`🚀 Server running on http://127.0.0.1:${PORT}`);
 });
+
+const gracefulShutdown = (signal) => {
+  console.log(`⚠️ Received ${signal}. Closing server gracefully...`);
+  server.close(() => {
+    console.log('HTTP & Socket.IO server closed.');
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    console.error('Forced shutdown timeout reached.');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

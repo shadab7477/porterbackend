@@ -475,6 +475,55 @@ export const rejectDriver = async (req, res) => {
       if (application[docType]?.url) {
         application[docType].verification = {
           status: 'rejected',
+          verifiedAt: new Date(),
+          rejectionReason: reason
+        };
+      }
+    });
+
+    if (application.aadharCard?.front) {
+      application.aadharCard.front.verification = {
+        status: 'rejected',
+        verifiedAt: new Date(),
+        rejectionReason: reason
+      };
+    }
+
+    if (application.aadharCard?.back) {
+      application.aadharCard.back.verification = {
+        status: 'rejected',
+        verifiedAt: new Date(),
+        rejectionReason: reason
+      };
+    }
+
+    if (application.aadharCard?.front || application.aadharCard?.back) {
+      application.aadharCard.verification = {
+        status: 'rejected',
+        verifiedAt: new Date(),
+        rejectionReason: reason
+      };
+    }
+
+    if (application.bankDetails?.accountNumber) {
+      application.bankDetails.verification = {
+        status: 'rejected',
+        verifiedAt: new Date(),
+        rejectionReason: reason
+      };
+    }
+
+    if (application.hiredDriver?.licenseImage?.url) {
+      application.hiredDriver.licenseImage.verification = {
+        status: 'rejected',
+        verifiedAt: new Date(),
+        rejectionReason: reason
+      };
+    }
+
+    application.verificationStatus = 'rejected';
+    application.rejectionReason = reason;
+    application.reviewedAt = new Date();
 
     await application.save();
 
