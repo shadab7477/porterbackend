@@ -11,7 +11,8 @@ const documentTypes = [
   'vehicleRC',
   'vehicleInsurance',
   'vehiclePhoto',
-  'bankDetails'
+  'bankDetails',
+  'hiredDriverLicense'
 ];
 
 const verifiableDocumentTypes = [...documentTypes, 'aadharCard'];
@@ -19,6 +20,10 @@ const verifiableDocumentTypes = [...documentTypes, 'aadharCard'];
 const getDocumentForType = (application, documentType) => {
   if (documentType === 'bankDetails') {
     return application.bankDetails?.accountNumber ? application.bankDetails : null;
+  }
+
+  if (documentType === 'hiredDriverLicense') {
+    return application.hiredDriver?.licenseImage?.url ? application.hiredDriver.licenseImage : null;
   }
 
   if (documentType === 'aadharFront') {
@@ -39,6 +44,13 @@ const getDocumentForType = (application, documentType) => {
 const setDocumentVerification = (application, documentType, verificationData) => {
   if (documentType === 'bankDetails') {
     application.bankDetails.verification = verificationData;
+    return;
+  }
+
+  if (documentType === 'hiredDriverLicense') {
+    if (application.hiredDriver && application.hiredDriver.licenseImage) {
+      application.hiredDriver.licenseImage.verification = verificationData;
+    }
     return;
   }
 
@@ -94,6 +106,7 @@ const getDocumentMatchPath = (documentType) => {
   if (documentType === 'bankDetails') return 'bankDetails.accountNumber';
   if (documentType === 'aadharFront') return 'aadharCard.front.url';
   if (documentType === 'aadharBack') return 'aadharCard.back.url';
+  if (documentType === 'hiredDriverLicense') return 'hiredDriver.licenseImage.url';
   return `${documentType}.url`;
 };
 
@@ -101,6 +114,7 @@ const getDocumentStatusPath = (documentType) => {
   if (documentType === 'bankDetails') return '$bankDetails.verification.status';
   if (documentType === 'aadharFront') return '$aadharCard.front.verification.status';
   if (documentType === 'aadharBack') return '$aadharCard.back.verification.status';
+  if (documentType === 'hiredDriverLicense') return '$hiredDriver.licenseImage.verification.status';
   return `$${documentType}.verification.status`;
 };
 
@@ -146,6 +160,8 @@ export const getApplications = async (req, res) => {
             { 'aadharCard.back.verification.status': docStatus }
           ]
         });
+      } else if (docType === 'hiredDriverLicense') {
+        query['hiredDriver.licenseImage.verification.status'] = docStatus;
       } else if (documentTypes.includes(docType)) {
         query[`${docType}.verification.status`] = docStatus;
       }
@@ -396,6 +412,13 @@ export const verifyDriver = async (req, res) => {
       };
     }
 
+    if (application.hiredDriver?.licenseImage?.url) {
+      application.hiredDriver.licenseImage.verification = {
+        status: 'verified',
+        verifiedAt: new Date()
+      };
+    }
+
     application.verificationStatus = 'verified';
     application.reviewedAt = new Date();
 
@@ -452,47 +475,6 @@ export const rejectDriver = async (req, res) => {
       if (application[docType]?.url) {
         application[docType].verification = {
           status: 'rejected',
-          verifiedAt: new Date(),
-          rejectionReason: reason
-        };
-      }
-    });
-
-    if (application.aadharCard?.front) {
-      application.aadharCard.front.verification = {
-        status: 'rejected',
-        verifiedAt: new Date(),
-        rejectionReason: reason
-      };
-    }
-
-    if (application.aadharCard?.back) {
-      application.aadharCard.back.verification = {
-        status: 'rejected',
-        verifiedAt: new Date(),
-        rejectionReason: reason
-      };
-    }
-
-    if (application.aadharCard?.front || application.aadharCard?.back) {
-      application.aadharCard.verification = {
-        status: 'rejected',
-        verifiedAt: new Date(),
-        rejectionReason: reason
-      };
-    }
-
-    if (application.bankDetails?.accountNumber) {
-      application.bankDetails.verification = {
-        status: 'rejected',
-        verifiedAt: new Date(),
-        rejectionReason: reason
-      };
-    }
-
-    application.verificationStatus = 'rejected';
-    application.rejectionReason = reason;
-    application.reviewedAt = new Date();
 
     await application.save();
 

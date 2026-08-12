@@ -292,6 +292,13 @@ driverApplicationSchema.pre('save', function(next) {
       this.bankDetails.verification.status = 'pending';
     }
   }
+
+  // Validate hired driver license verification if exists
+  if (this.hiredDriver?.licenseImage?.verification) {
+    if (!['pending', 'verified', 'rejected'].includes(this.hiredDriver.licenseImage.verification.status)) {
+      this.hiredDriver.licenseImage.verification.status = 'pending';
+    }
+  }
   
   next();
 });
@@ -329,6 +336,10 @@ driverApplicationSchema.methods.calculateOverallStatus = function() {
   const bankVerified = !this.bankDetails || 
     (this.bankDetails.verification?.status === 'verified');
 
+  // Check hired driver license (if applicable)
+  const hiredLicenseVerified = !this.hiredDriver?.hasHiredDriver || !this.hiredDriver?.licenseImage?.url ||
+    (this.hiredDriver.licenseImage.verification?.status === 'verified');
+
   // Check for any rejections
   const anyRejected = 
     (this.profilePhoto?.verification?.status === 'rejected') ||
@@ -338,7 +349,8 @@ driverApplicationSchema.methods.calculateOverallStatus = function() {
     (this.drivingLicense?.verification?.status === 'rejected') ||
     (this.vehicleRC?.verification?.status === 'rejected') ||
     (this.vehiclePhoto?.verification?.status === 'rejected') ||
-    (this.bankDetails?.verification?.status === 'rejected');
+    (this.bankDetails?.verification?.status === 'rejected') ||
+    (this.hiredDriver?.hasHiredDriver && this.hiredDriver?.licenseImage?.verification?.status === 'rejected');
 
   // Check for any pending verifications
   const anyPending = 
@@ -349,11 +361,12 @@ driverApplicationSchema.methods.calculateOverallStatus = function() {
     (this.drivingLicense?.verification?.status === 'pending') ||
     (this.vehicleRC?.verification?.status === 'pending') ||
     (this.vehiclePhoto?.verification?.status === 'pending') ||
-    (this.bankDetails?.verification?.status === 'pending');
+    (this.bankDetails?.verification?.status === 'pending') ||
+    (this.hiredDriver?.hasHiredDriver && this.hiredDriver?.licenseImage?.url && this.hiredDriver?.licenseImage?.verification?.status === 'pending');
 
   // Check if all documents are verified
   const allVerified = profilePhotoVerified && aadharVerified && panVerified && 
-                      licenseVerified && rcVerified && vehiclePhotoVerified && bankVerified;
+                      licenseVerified && rcVerified && vehiclePhotoVerified && bankVerified && hiredLicenseVerified;
 
   if (anyRejected) return 'partially_verified';
   if (anyPending) return 'under_review';
