@@ -237,7 +237,7 @@ export const verifyOTP = async (req, res) => {
             
             driver = new Driver({
               driverId: existingApplication.driverId,
-              name: hasHired ? `${existingApplication.hiredDriver.name} (Captain: ${existingApplication.fullName})` : existingApplication.fullName,
+              name: hasHired ? existingApplication.hiredDriver.name : existingApplication.fullName,
               phone: existingApplication.phone,
               email: existingApplication.email,
               applicationId: existingApplication._id,
@@ -471,7 +471,7 @@ export const driverLogin = async (req, res) => {
       
       driver = new Driver({
         driverId: application.driverId,
-        name: hasHired ? `${application.hiredDriver.name} (Captain: ${application.fullName})` : application.fullName,
+        name: hasHired ? application.hiredDriver.name : application.fullName,
         phone: application.phone,
         email: application.email,
         applicationId: application._id,
@@ -908,7 +908,7 @@ export const completeRegistration = async (req, res) => {
 
           verifiedDriver = new Driver({
             driverId: application.driverId,
-            name: hasHired ? `${application.hiredDriver.name} (Captain: ${application.fullName})` : application.fullName,
+            name: hasHired ? application.hiredDriver.name : application.fullName,
             phone: application.phone,
             email: application.email,
             applicationId: application._id,
@@ -1177,7 +1177,7 @@ export const verifyDocument = async (req, res) => {
 
         driver = new Driver({
           driverId: application.driverId,
-          name: hasHired ? `${application.hiredDriver.name} (Captain: ${application.fullName})` : application.fullName,
+          name: hasHired ? application.hiredDriver.name : application.fullName,
           phone: application.phone,
           email: application.email,
           applicationId: application._id,
