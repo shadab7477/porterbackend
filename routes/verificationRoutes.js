@@ -8,7 +8,8 @@ import {
   updateStatus,
   getStats,
   verifyDocument,
-  getDocumentVerificationSummary
+  getDocumentVerificationSummary,
+  updatePaymentStatus
 } from '../controllers/verificationController.js';
 
 const router = express.Router();
@@ -27,6 +28,7 @@ router.get('/applications/:id', getApplicationById);
 router.put('/applications/:id/verify', verifyDriver);
 router.put('/applications/:id/reject', rejectDriver);
 router.patch('/applications/:id/status', updateStatus);
+router.put('/applications/:id/payment', updatePaymentStatus);
 
 // Document-level verification
 router.put('/applications/:id/documents/:documentType/verify', verifyDocument);

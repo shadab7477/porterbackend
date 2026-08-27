@@ -17,28 +17,38 @@ const documentTypes = [
 
 const verifiableDocumentTypes = [...documentTypes, 'aadharCard'];
 
+const hasValidUrl = (doc) => {
+  if (!doc) return null;
+  if (typeof doc === 'string' && doc.trim().length > 0) return { url: doc, verification: { status: 'pending' } };
+  if (typeof doc === 'object') {
+    const url = doc.url || doc.path || doc.secure_url;
+    if (url) return { ...doc, url };
+  }
+  return null;
+};
+
 const getDocumentForType = (application, documentType) => {
   if (documentType === 'bankDetails') {
     return application.bankDetails?.accountNumber ? application.bankDetails : null;
   }
 
   if (documentType === 'hiredDriverLicense') {
-    return application.hiredDriver?.licenseImage?.url ? application.hiredDriver.licenseImage : null;
+    return hasValidUrl(application.hiredDriver?.licenseImage) || hasValidUrl(application.hiredDriverLicense);
   }
 
   if (documentType === 'aadharFront') {
-    return application.aadharCard?.front || null;
+    return hasValidUrl(application.aadharCard?.front) || hasValidUrl(application.aadharFront);
   }
 
   if (documentType === 'aadharBack') {
-    return application.aadharCard?.back || null;
+    return hasValidUrl(application.aadharCard?.back) || hasValidUrl(application.aadharBack);
   }
 
   if (documentType === 'aadharCard') {
-    return application.aadharCard?.front || application.aadharCard?.back ? application.aadharCard : null;
+    return hasValidUrl(application.aadharCard?.front) || hasValidUrl(application.aadharCard?.back) || hasValidUrl(application.aadharCard);
   }
 
-  return application[documentType]?.url ? application[documentType] : null;
+  return hasValidUrl(application[documentType]) || hasValidUrl(application.documents?.[documentType]);
 };
 
 const setDocumentVerification = (application, documentType, verificationData) => {
@@ -791,6 +801,82 @@ export const getStats = async (req, res) => {
       success: false,
       message: 'Failed to get statistics',
       error: error.message,
+    });
+  }
+};
+
+// Update payment status for a driver application (Admin action)
+export const updatePaymentStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, amount, transactionId, note } = req.body;
+
+    if (!['pending', 'completed', 'failed'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid payment status. Allowed values: pending, completed, failed'
+      });
+    }
+
+    const application = await DriverApplication.findById(id);
+    if (!application) {
+      return res.status(404).json({
+        success: false,
+        message: 'Application not found'
+      });
+    }
+
+    if (!application.subscriptionPayment) {
+      application.subscriptionPayment = {};
+    }
+
+    application.subscriptionPayment.status = status;
+    if (amount !== undefined && amount !== null && !isNaN(Number(amount))) {
+      application.subscriptionPayment.amount = Number(amount);
+    }
+
+    if (status === 'completed') {
+      application.subscriptionPayment.paidAt = new Date();
+      application.subscriptionPayment.razorpayPaymentId = transactionId || application.subscriptionPayment.razorpayPaymentId || 'ADMIN_MARKED';
+    } else if (status === 'pending') {
+      application.subscriptionPayment.paidAt = null;
+    }
+
+    await application.save();
+
+    // If driver record exists for this application or phone, sync driver.subscription
+    try {
+      const Driver = (await import('../models/Driver.js')).default;
+      const driver = await Driver.findOne({
+        $or: [
+          { applicationId: application._id },
+          { phone: application.phone }
+        ]
+      });
+
+      if (driver) {
+        if (!driver.subscription) {
+          driver.subscription = {};
+        }
+        driver.subscription.status = status === 'completed' ? 'active' : 'pending';
+        driver.subscription.amount = application.subscriptionPayment.amount || driver.subscription.amount || 0;
+        await driver.save();
+      }
+    } catch (driverErr) {
+      console.warn('Could not sync Driver subscription status:', driverErr.message);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Payment status updated to ${status}`,
+      data: application
+    });
+  } catch (error) {
+    console.error('Update payment status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update payment status',
+      error: error.message
     });
   }
 };
