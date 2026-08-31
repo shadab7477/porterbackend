@@ -129,9 +129,10 @@ const getDocumentStatusPath = (documentType) => {
 };
 
 // Get all applications with filtering
+// Get all applications with filtering
 export const getApplications = async (req, res) => {
   try {
-    const { status, documentStatus, paymentStatus, page = 1, limit = 10 } = req.query;
+    const { status, documentStatus, docType, docStatus, paymentStatus, search, page = 1, limit = 10 } = req.query;
     
     let query = {};
     const addAndCondition = (condition) => {
@@ -139,10 +140,20 @@ export const getApplications = async (req, res) => {
       query.$and.push(condition);
     };
 
+    // 1. Status Filter
     if (status && status !== 'all') {
-      query.verificationStatus = status;
+      if (status === 'pending') {
+        query.verificationStatus = { $in: ['pending', 'submitted', 'under_review'] };
+      } else if (status === 'submitted') {
+        query.verificationStatus = { $in: ['submitted', 'pending'] };
+      } else if (status === 'under_review') {
+        query.verificationStatus = { $in: ['under_review', 'pending', 'submitted'] };
+      } else {
+        query.verificationStatus = status;
+      }
     }
 
+    // 2. Payment Status Filter
     if (paymentStatus === 'completed') {
       query['subscriptionPayment.status'] = 'completed';
     } else if (paymentStatus === 'remaining') {
@@ -156,24 +167,59 @@ export const getApplications = async (req, res) => {
       query['subscriptionPayment.status'] = paymentStatus;
     }
 
-    // Filter by specific document status if provided
-    if (documentStatus && documentStatus.documentType && documentStatus.status) {
-      const docType = documentStatus.documentType;
-      const docStatus = documentStatus.status;
-      
-      if (docType === 'bankDetails') {
-        query['bankDetails.verification.status'] = docStatus;
-      } else if (docType === 'aadharCard') {
-        addAndCondition({
-          $or: [
-            { 'aadharCard.front.verification.status': docStatus },
-            { 'aadharCard.back.verification.status': docStatus }
-          ]
-        });
-      } else if (docType === 'hiredDriverLicense') {
-        query['hiredDriver.licenseImage.verification.status'] = docStatus;
-      } else if (documentTypes.includes(docType)) {
-        query[`${docType}.verification.status`] = docStatus;
+    // 3. Search Filter
+    if (search && search.trim()) {
+      const searchRegex = new RegExp(search.trim().replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'i');
+      addAndCondition({
+        $or: [
+          { fullName: searchRegex },
+          { phone: searchRegex },
+          { email: searchRegex },
+          { vehicleNumber: searchRegex },
+          { driverId: searchRegex },
+          { 'hiredDriver.name': searchRegex },
+          { 'hiredDriver.phone': searchRegex }
+        ]
+      });
+    }
+
+    // 4. Filter by specific document status if provided
+    const targetDocType = docType || (typeof documentStatus === 'object' ? documentStatus.documentType : null);
+    const targetDocStatus = docStatus || (typeof documentStatus === 'object' ? documentStatus.status : null);
+
+    if (targetDocType && targetDocStatus && targetDocStatus !== 'all') {
+      if (targetDocType === 'bankDetails') {
+        query['bankDetails.verification.status'] = targetDocStatus;
+      } else if (targetDocType === 'aadharCard') {
+        if (targetDocStatus === 'verified') {
+          addAndCondition({
+            $or: [
+              { 'aadharCard.front.verification.status': 'verified' },
+              { 'aadharCard.back.verification.status': 'verified' },
+              { 'aadharCard.verification.status': 'verified' }
+            ]
+          });
+        } else if (targetDocStatus === 'rejected') {
+          addAndCondition({
+            $or: [
+              { 'aadharCard.front.verification.status': 'rejected' },
+              { 'aadharCard.back.verification.status': 'rejected' },
+              { 'aadharCard.verification.status': 'rejected' }
+            ]
+          });
+        } else {
+          addAndCondition({
+            $or: [
+              { 'aadharCard.front.verification.status': 'pending' },
+              { 'aadharCard.back.verification.status': 'pending' },
+              { 'aadharCard.verification.status': 'pending' }
+            ]
+          });
+        }
+      } else if (targetDocType === 'hiredDriverLicense') {
+        query['hiredDriver.licenseImage.verification.status'] = targetDocStatus;
+      } else if (documentTypes.includes(targetDocType)) {
+        query[`${targetDocType}.verification.status`] = targetDocStatus;
       }
     }
 
@@ -191,7 +237,7 @@ export const getApplications = async (req, res) => {
       pagination: {
         total,
         page: parseInt(page),
-        pages: Math.ceil(total / limit),
+        pages: Math.ceil(total / limit) || 1,
       },
     });
   } catch (error) {
@@ -788,8 +834,16 @@ export const getStats = async (req, res) => {
     };
 
     overallStats.forEach(stat => {
-      result[stat._id] = stat.count;
+      if (stat._id) {
+        result[stat._id] = stat.count;
+      }
     });
+
+    // If pending is 0, sum up pending, submitted, and under_review counts for the pending tab
+    const pendingCount = await DriverApplication.countDocuments({
+      verificationStatus: { $in: ['pending', 'submitted', 'under_review'] }
+    });
+    result.pending = pendingCount;
 
     res.status(200).json({
       success: true,
