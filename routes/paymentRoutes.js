@@ -11,8 +11,13 @@ import {
 } from '../controllers/paymentController.js';
 import { customerAuthMiddleware } from '../middleware/customerAuthMiddleware.js';
 import driverAuthMiddleware from '../middleware/driverAuthMiddleware.js';
+import { authMiddleware } from '../middleware/authMiddleware.js';
+import { getAllPaymentHistoryAdmin } from '../controllers/paymentController.js';
 
 const router = express.Router();
+
+// Admin Payment History Route
+router.get('/admin/history', authMiddleware, getAllPaymentHistoryAdmin);
 
 // Public webhook endpoint (no auth required)
 router.post('/webhook/razorpay', express.raw({ type: 'application/json' }), handleRazorpayWebhook);

@@ -959,3 +959,57 @@ export const verifyReceiverPayment = async (req, res) => {
         });
     }
 };
+
+// ==================== GET ALL PAYMENT HISTORY (ADMIN) ====================
+export const getAllPaymentHistoryAdmin = async (req, res) => {
+    try {
+        const { status, method, search, page = 1, limit = 10 } = req.query;
+        const pageNum = parseInt(page, 10) || 1;
+        const limitNum = parseInt(limit, 10) || 10;
+        const skip = (pageNum - 1) * limitNum;
+
+        const query = {};
+        if (status && status !== 'all') {
+            query.status = status === 'completed' ? 'success' : status;
+        }
+        if (method && method !== 'all') {
+            query.method = method;
+        }
+
+        let payments = await Payment.find(query)
+            .populate('customerId', 'name phone email')
+            .populate('orderId', 'rideId requestedVehicleType fare pickupLocation dropLocation')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNum);
+
+        const total = await Payment.countDocuments(query);
+
+        if (search) {
+            const queryLower = search.toLowerCase();
+            payments = payments.filter(p => 
+                (p.paymentId && p.paymentId.toLowerCase().includes(queryLower)) ||
+                (p.transactionId && p.transactionId.toLowerCase().includes(queryLower)) ||
+                (p.customerId?.name && p.customerId.name.toLowerCase().includes(queryLower)) ||
+                (p.customerId?.phone && p.customerId.phone.toLowerCase().includes(queryLower))
+            );
+        }
+
+        res.json({
+            success: true,
+            data: payments,
+            pagination: {
+                total,
+                page: pageNum,
+                limit: limitNum,
+                pages: Math.ceil(total / limitNum)
+            }
+        });
+    } catch (error) {
+        console.error('getAllPaymentHistoryAdmin error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to fetch payment history'
+        });
+    }
+};

@@ -3,6 +3,7 @@ import express from 'express';
 import {
   applyForMerchant,
   getMerchantStatus,
+  toggleMerchantStatus,
   getMerchantBankDetails,
   updateMerchantBankDetails,
   getAllMerchantApplications,
@@ -33,8 +34,9 @@ router.post(
   applyForMerchant
 );
 
-// Get current merchant status for logged-in customer
+// Get current merchant status & toggle for logged-in customer
 router.get('/status', customerAuthMiddleware, getMerchantStatus);
+router.patch('/toggle-status', customerAuthMiddleware, toggleMerchantStatus);
 router.get('/bank-details', customerAuthMiddleware, getMerchantBankDetails);
 router.put('/bank-details', customerAuthMiddleware, updateMerchantBankDetails);
 

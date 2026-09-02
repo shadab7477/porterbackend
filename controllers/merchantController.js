@@ -209,6 +209,38 @@ export const getMerchantStatus = async (req, res) => {
   }
 };
 
+// PATCH /api/merchant/toggle-status
+export const toggleMerchantStatus = async (req, res) => {
+  try {
+    const customerId = req.customerId;
+    const customer = await Customer.findById(customerId);
+
+    if (!customer) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+
+    const newStatus = req.body.isMerchant !== undefined ? Boolean(req.body.isMerchant) : !customer.isMerchant;
+
+    customer.isMerchant = newStatus;
+    if (newStatus && !customer.merchantDiscount) {
+      customer.merchantDiscount = 5;
+    }
+    await customer.save();
+
+    res.json({
+      success: true,
+      message: `Merchant account status switched to ${newStatus ? 'ON (Active)' : 'OFF (Disabled)'}`,
+      data: {
+        isMerchant: customer.isMerchant,
+        merchantDiscount: customer.isMerchant ? customer.merchantDiscount : 0
+      }
+    });
+  } catch (error) {
+    console.error('toggleMerchantStatus error:', error);
+    res.status(500).json({ success: false, message: 'Failed to toggle merchant status' });
+  }
+};
+
 // GET /api/merchant/bank-details
 export const getMerchantBankDetails = async (req, res) => {
   try {

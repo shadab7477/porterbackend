@@ -34,6 +34,7 @@ import adminNotificationRoutes from './routes/adminNotificationRoutes.js';
 import adminRestrictedItemsRoutes from './routes/adminRestrictedItemsRoutes.js';
 import adminGoodsItemsRoutes from './routes/adminGoodsItemsRoutes.js';
 import adminPricingRoutes from './routes/adminPricingRoutes.js';
+import adminDashboardRoutes from './routes/adminDashboardRoutes.js';
 import packerBookingRoutes from './routes/packerBookingRoutes.js';
 import merchantRoutes from './routes/merchantRoutes.js';
 
@@ -198,6 +199,7 @@ app.use('/api/admin/notifications', adminNotificationRoutes);
 app.use('/api/admin/restricted-items', adminRestrictedItemsRoutes);
 app.use('/api/admin/goods-items', adminGoodsItemsRoutes);
 app.use('/api/admin/pricing', adminPricingRoutes);
+app.use('/api/admin/dashboard', adminDashboardRoutes);
 app.use('/api/packers-movers', packerBookingRoutes);
 app.use('/api/merchant', merchantRoutes);
 app.use('/api/vehicles', vehicleRoutes);
