@@ -71,6 +71,35 @@ const checkDriverVerification = async (driverId) => {
   return { driver, application };
 };
 
+// Helper to ensure Driver record exists when application is verified
+const ensureDriverCreated = async (application) => {
+  let driver = await Driver.findOne({ phone: application.phone });
+  if (!driver) {
+    const vType = application.vehicleType?.toLowerCase() || '';
+    const isTwoWheeler = vType === 'bike' || vType === 'scooter';
+    const hasHired = application.hiredDriver?.hasHiredDriver;
+
+    driver = new Driver({
+      driverId: application.driverId,
+      name: hasHired ? application.hiredDriver.name : application.fullName,
+      phone: application.phone,
+      email: application.email,
+      applicationId: application._id,
+      vehicleType: application.vehicleType,
+      vehicleNumber: application.vehicleNumber,
+      isOnline: false,
+      lastActive: new Date(),
+      subscription: {
+        status: isTwoWheeler ? 'pending' : 'active',
+        amount: isTwoWheeler ? 499 : 0,
+        validUntil: null
+      }
+    });
+    await driver.save();
+  }
+  return driver;
+};
+
 // ==================== PUBLIC ROUTES ====================
 
 const isDummyMobile = (num) => {
@@ -1021,16 +1050,55 @@ export const getApplicationStatus = async (req, res) => {
       bankDetails: application.bankDetails?.verification?.status || 'not_provided'
     };
 
+    let token = null;
+    let driverData = null;
+    const isVerified = application.verificationStatus === 'verified';
+
+    if (isVerified) {
+      const driver = await ensureDriverCreated(application);
+
+      let walletBalance = 0;
+      try {
+        const wallet = await DriverWallet.findOne({ driverId: driver._id });
+        if (wallet) walletBalance = wallet.balance;
+      } catch (err) {}
+
+      token = generateDriverToken(driver._id, application.phone, true);
+
+      driverData = {
+        id: driver._id,
+        driverId: driver.driverId,
+        applicationId: driver.applicationId?._id || driver.applicationId,
+        name: driver.name,
+        phone: driver.phone,
+        email: driver.email,
+        isOnline: driver.isOnline,
+        isAvailable: driver.isAvailable,
+        vehicleType: driver.vehicleType,
+        vehicleNumber: driver.vehicleNumber,
+        rating: driver.rating,
+        totalTrips: driver.totalTrips,
+        totalEarnings: driver.totalEarnings,
+        walletBalance: walletBalance,
+        applicationStatus: application.verificationStatus
+      };
+    }
+
     res.status(200).json({
       success: true,
       data: {
+        token,
+        isVerified,
+        requiresRegistration: false,
         applicationId: application._id,
         driverId: application.driverId,
         fullName: application.fullName,
         verificationStatus: application.verificationStatus,
+        applicationStatus: application.verificationStatus,
         documentStatus,
         rejectionReason: application.rejectionReason,
-        submittedAt: application.submittedAt
+        submittedAt: application.submittedAt,
+        driver: driverData
       }
     });
   } catch (error) {

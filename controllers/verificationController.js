@@ -1,5 +1,33 @@
-// controllers/verificationController.js
 import DriverApplication from '../models/DriverApplication.js';
+import Driver from '../models/Driver.js';
+
+const ensureDriverCreated = async (application) => {
+  let driver = await Driver.findOne({ phone: application.phone });
+  if (!driver) {
+    const vType = application.vehicleType?.toLowerCase() || '';
+    const isTwoWheeler = vType === 'bike' || vType === 'scooter';
+    const hasHired = application.hiredDriver?.hasHiredDriver;
+
+    driver = new Driver({
+      driverId: application.driverId,
+      name: hasHired ? application.hiredDriver.name : application.fullName,
+      phone: application.phone,
+      email: application.email,
+      applicationId: application._id,
+      vehicleType: application.vehicleType,
+      vehicleNumber: application.vehicleNumber,
+      isOnline: false,
+      lastActive: new Date(),
+      subscription: {
+        status: isTwoWheeler ? 'pending' : 'active',
+        amount: isTwoWheeler ? 499 : 0,
+        validUntil: null
+      }
+    });
+    await driver.save();
+  }
+  return driver;
+};
 
 // Document types that can be verified
 const documentTypes = [
@@ -387,6 +415,10 @@ export const verifyDocument = async (req, res) => {
 
     await application.save();
 
+    if (application.verificationStatus === 'verified') {
+      await ensureDriverCreated(application);
+    }
+
     res.status(200).json({
       success: true,
       message: `${documentType} verification status updated successfully`,
@@ -479,6 +511,7 @@ export const verifyDriver = async (req, res) => {
     application.reviewedAt = new Date();
 
     await application.save();
+    await ensureDriverCreated(application);
 
     res.status(200).json({
       success: true,
@@ -660,6 +693,10 @@ export const updateStatus = async (req, res) => {
     }
 
     await application.save();
+
+    if (application.verificationStatus === 'verified') {
+      await ensureDriverCreated(application);
+    }
 
     res.status(200).json({
       success: true,
