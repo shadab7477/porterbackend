@@ -650,7 +650,9 @@ export const completeRegistration = async (req, res) => {
       const decoded = verifyDriverToken(token);
       const phone = decoded.phone;
       
-      if (decoded.isVerified) {
+      let application = await DriverApplication.findOne({ phone });
+
+      if (application && application.verificationStatus === 'verified') {
         return res.status(400).json({
           success: false,
           message: 'Driver is already verified. Cannot register again.'
@@ -742,10 +744,10 @@ export const completeRegistration = async (req, res) => {
         });
       }
 
-      let application = await DriverApplication.findOne({ phone });
-
       if (application) {
         application.fullName = fullName;
+        application.rejectionReason = undefined;
+        application.submittedAt = new Date();
         application.email = email;
         application.dateOfBirth = new Date(dateOfBirth);
         application.address = parsedAddress;
@@ -958,6 +960,19 @@ export const completeRegistration = async (req, res) => {
         }
 
         responseToken = generateDriverToken(verifiedDriver._id, phone, true);
+      } else {
+        responseToken = jwt.sign(
+          { 
+            id: application._id,
+            phone, 
+            type: 'driver_auth',
+            role: 'driver',
+            isVerified: false,
+            requiresRegistration: false,
+            applicationStatus: application.verificationStatus
+          },
+          process.env.JWT_SECRET
+        );
       }
 
       const documentStatus = {
@@ -1089,7 +1104,7 @@ export const getApplicationStatus = async (req, res) => {
       data: {
         token,
         isVerified,
-        requiresRegistration: false,
+        requiresRegistration: application.verificationStatus === 'rejected',
         applicationId: application._id,
         driverId: application.driverId,
         fullName: application.fullName,
