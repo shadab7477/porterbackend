@@ -242,7 +242,18 @@ export const getAllDrivers = async (req, res) => {
     if (status === 'busy') query.isAvailable = false;
     if (status === 'online') query.isOnline = true;
     if (status === 'offline') query.isOnline = false;
-    if (vehicleType) query.vehicleType = vehicleType;
+    if (vehicleType && vehicleType !== 'all') {
+      const vLower = vehicleType.trim().toLowerCase();
+      if (vLower === '2_wheelers' || vLower === '2 wheelers' || vLower === '2wheeler') {
+        query.vehicleType = { $regex: /bike|scoot/i };
+      } else if (vLower === '3_wheelers' || vLower === '3 wheelers' || vLower === '3wheeler') {
+        query.vehicleType = { $regex: /3_wheeler|auto|loader|mini_3w|3 wheeler/i };
+      } else if (vLower === '4_wheelers' || vLower === '4 wheelers' || vLower === '4wheeler') {
+        query.vehicleType = { $regex: /tata_ace|4_wheeler|car|truck|pickup|4 wheeler/i };
+      } else {
+        query.vehicleType = { $regex: new RegExp(vehicleType.trim().replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'i') };
+      }
+    }
     if (verificationStatus) query.verificationStatus = verificationStatus;
     
     const pageNum = parseInt(page, 10) || 1;

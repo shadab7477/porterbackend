@@ -160,7 +160,7 @@ const getDocumentStatusPath = (documentType) => {
 // Get all applications with filtering
 export const getApplications = async (req, res) => {
   try {
-    const { status, documentStatus, docType, docStatus, paymentStatus, search, page = 1, limit = 10 } = req.query;
+    const { status, documentStatus, docType, docStatus, paymentStatus, vehicleType, search, page = 1, limit = 10 } = req.query;
     
     let query = {};
     const addAndCondition = (condition) => {
@@ -193,6 +193,22 @@ export const getApplications = async (req, res) => {
       });
     } else if (paymentStatus && paymentStatus !== 'all') {
       query['subscriptionPayment.status'] = paymentStatus;
+    }
+
+    // 3. Vehicle Type Filter
+    if (vehicleType && vehicleType !== 'all') {
+      const trimmedVehicle = vehicleType.trim();
+      const vLower = trimmedVehicle.toLowerCase();
+      if (vLower === '2_wheelers' || vLower === '2 wheelers' || vLower === '2wheeler') {
+        addAndCondition({ vehicleType: { $regex: /bike|scoot/i } });
+      } else if (vLower === '3_wheelers' || vLower === '3 wheelers' || vLower === '3wheeler') {
+        addAndCondition({ vehicleType: { $regex: /3_wheeler|auto|loader|mini_3w|3 wheeler/i } });
+      } else if (vLower === '4_wheelers' || vLower === '4 wheelers' || vLower === '4wheeler') {
+        addAndCondition({ vehicleType: { $regex: /tata_ace|4_wheeler|car|truck|pickup|4 wheeler/i } });
+      } else {
+        const vehicleRegex = new RegExp(trimmedVehicle.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'i');
+        addAndCondition({ vehicleType: vehicleRegex });
+      }
     }
 
     // 3. Search Filter

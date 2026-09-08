@@ -9,7 +9,7 @@ const documentVerificationSchema = new mongoose.Schema({
   verifiedAt: Date,
   rejectionReason: String,
   comments: String,
-  verifiedBy: {
+  verifiedBy: { 
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Admin'
   }
