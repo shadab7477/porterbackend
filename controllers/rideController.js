@@ -7,6 +7,7 @@ import DriverWalletTransaction from '../models/DriverWalletTransaction.js';
 import CustomerWallet from '../models/CustomerWallet.js';
 import DriverWallet from '../models/DriverWallet.js';
 import axios from 'axios';
+import jwt from 'jsonwebtoken';
 import { logRideFlow } from '../utils/rideLogger.js';
 
 // Google Maps API configuration
@@ -814,18 +815,29 @@ export const requestRide = async (req, res) => {
 
     // Use fare amount from frontend if provided, otherwise calculate it
     const isMerchant = customer.isMerchant || false;
+    const merchantDiscountPercent = (isMerchant && customer.merchantDiscount) ? customer.merchantDiscount : (isMerchant ? 5 : 0);
     let fare;
     
     if (reqAmount) {
       const parsedAmount = parseFloat(reqAmount.toString().replace(/[^0-9.]/g, '')) || 0;
+      const calculatedCashback = isMerchant ? Math.round(parsedAmount * (merchantDiscountPercent / 100)) : 0;
       fare = {
         distanceFare: parsedAmount,
         total: parsedAmount,
         discount: 0,
-        cashbackAmount: 0,
+        cashbackAmount: calculatedCashback,
         finalAmount: parsedAmount,
         isMerchantRide: isMerchant,
-        merchantDiscount: isMerchant ? 5 : 0 // You can adjust this if frontend handles merchant logic
+        merchantDiscount: merchantDiscountPercent,
+        breakdown: {
+          baseFare: `₹${parsedAmount}`,
+          ratePerKm: `Custom`,
+          distance: `${totalDistance.toFixed(1)} km`,
+          subtotal: `₹${parsedAmount}`,
+          discount: '₹0',
+          cashback: isMerchant ? `₹${calculatedCashback} (${merchantDiscountPercent}% added to wallet after ride)` : '₹0',
+          total: `₹${parsedAmount}`
+        }
       };
     } else {
       fare = await Ride.calculateFare(totalDistance, vehicleType, isMerchant);
@@ -1634,10 +1646,14 @@ export const completeRide = async (req, res) => {
     // We only preserve the variable customerWalletNew for potential use below.
 
     // ====== MERCHANT CASHBACK: Credit cashback to customer wallet ======
-    if (ride.fare.isMerchantRide && ride.fare.cashbackAmount > 0) {
+    const cashbackToCredit = (ride.fare?.cashbackAmount && ride.fare.cashbackAmount > 0)
+      ? ride.fare.cashbackAmount
+      : (ride.fare?.isMerchantRide ? Math.round((ride.fare.finalAmount || ride.fare.total || 0) * ((ride.fare.merchantDiscount || 5) / 100)) : 0);
+
+    if (cashbackToCredit > 0) {
       const customerWallet = await getOrCreateCustomerWallet(ride.customer.customerId);
       const custPrevBalance = customerWallet.balance;
-      customerWallet.balance += ride.fare.cashbackAmount;
+      customerWallet.balance += cashbackToCredit;
       await customerWallet.save();
       
       // Update customerWalletNew if it was already fetched for wallet ride
@@ -1647,7 +1663,7 @@ export const completeRide = async (req, res) => {
 
       await CustomerWalletTransaction.create({
         customerId: ride.customer.customerId,
-        amount: ride.fare.cashbackAmount,
+        amount: cashbackToCredit,
         type: 'credit',
         transactionCategory: 'bonus',
         description: `Merchant cashback for ride ${ride.rideId}`,
@@ -2919,8 +2935,29 @@ export const calculateFareEstimate = async (req, res) => {
 
     totalDistance = parseFloat(totalDistance.toFixed(2));
 
+    // Check if logged-in customer is a merchant
+    let isMerchant = false;
+    const targetCustId = req.customerId || req.query.customerId;
+    if (targetCustId) {
+      const cust = await Customer.findById(targetCustId).select('isMerchant');
+      if (cust) isMerchant = cust.isMerchant || false;
+    } else if (req.headers?.authorization && req.headers.authorization.startsWith('Bearer ')) {
+      try {
+        const token = req.headers.authorization.split(' ')[1];
+        if (token) {
+          const decoded = jwt.verify(token, process.env.JWT_SECRET);
+          if (decoded && decoded.id) {
+            const cust = await Customer.findById(decoded.id).select('isMerchant');
+            if (cust) isMerchant = cust.isMerchant || false;
+          }
+        }
+      } catch (e) {
+        // Public endpoint ignore invalid token
+      }
+    }
+
     // Calculate fare based on total cumulative distance
-    const fare = await Ride.calculateFare(totalDistance, vehicleType);
+    const fare = await Ride.calculateFare(totalDistance, vehicleType, isMerchant);
 
     const nearbyDriversResult = await Driver.aggregate([
       {
