@@ -366,31 +366,33 @@ rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car'
 
   const roundedTotal = Math.round(totalFare);
 
-  // Apply merchant 5% cashback
-  const MERCHANT_CASHBACK_PERCENT = 5;
-  let finalAmount = roundedTotal;
+  // Apply merchant 5% price surcharge — increases ride price by 5%
+  // The surcharge amount is returned as cashback to customer wallet after ride completion
+  const MERCHANT_SURCHARGE_PERCENT = 5;
   let cashbackAmount = 0;
+  let finalAmount = roundedTotal;
 
   if (isMerchant) {
-    cashbackAmount = Math.round(roundedTotal * MERCHANT_CASHBACK_PERCENT / 100);
+    cashbackAmount = Math.round(roundedTotal * MERCHANT_SURCHARGE_PERCENT / 100);
+    finalAmount = roundedTotal + cashbackAmount; // price is 5% higher for merchants
   }
 
   return {
     distanceFare:     roundedTotal,
-    total:            roundedTotal,
+    total:            finalAmount,
     discount:         0,
     cashbackAmount:   cashbackAmount,
     finalAmount,
     isMerchantRide:   isMerchant,
-    merchantDiscount: isMerchant ? MERCHANT_CASHBACK_PERCENT : 0,
+    merchantDiscount: isMerchant ? MERCHANT_SURCHARGE_PERCENT : 0,
     breakdown: {
-      baseFare:    `₹${baseFare}`,
-      ratePerKm:   `₹${ratePerKm}/km`,
-      distance:    `${distance.toFixed(1)} km`,
-      subtotal:    `₹${Math.round(subtotal)}`,
-      discount:    discountPercentage > 0 ? `₹${Math.round(discountAmount)} (${discountPercentage}% off for >10km)` : '₹0',
-      cashback:    isMerchant ? `₹${cashbackAmount} (5% added to wallet after ride)` : '₹0',
-      total:       `₹${finalAmount}`
+      baseFare:          `₹${baseFare}`,
+      ratePerKm:         `₹${ratePerKm}/km`,
+      distance:          `${distance.toFixed(1)} km`,
+      subtotal:          `₹${Math.round(subtotal)}`,
+      discount:          discountPercentage > 0 ? `₹${Math.round(discountAmount)} (${discountPercentage}% off for >10km)` : '₹0',
+      merchantSurcharge: isMerchant ? `+₹${cashbackAmount} (5% surcharge, returned as cashback after ride)` : '₹0',
+      total:             `₹${finalAmount}`
     }
   };
 };
@@ -402,13 +404,12 @@ const Ride = mongoose.model('Ride', rideSchema);
   try {
     await Ride.createIndexes();
     console.log('✅ Ride indexes created successfully');
-    
-    // Verify geo index specifically
+
     const indexes = await Ride.collection.indexes();
-    const hasGeoIndex = indexes.some(idx => 
+    const hasGeoIndex = indexes.some(idx =>
       idx.key && idx.key.pickupLocation === '2dsphere'
     );
-    
+
     if (hasGeoIndex) {
       console.log('✅ Geo index on pickupLocation exists');
     } else {

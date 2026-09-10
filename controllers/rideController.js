@@ -820,13 +820,15 @@ export const requestRide = async (req, res) => {
     
     if (reqAmount) {
       const parsedAmount = parseFloat(reqAmount.toString().replace(/[^0-9.]/g, '')) || 0;
+      // Apply same merchant 5% surcharge as calculateFare: price goes up 5%, returned as cashback after ride
       const calculatedCashback = isMerchant ? Math.round(parsedAmount * (merchantDiscountPercent / 100)) : 0;
+      const merchantFinalAmount = parsedAmount + calculatedCashback; // 5% added for merchants
       fare = {
         distanceFare: parsedAmount,
-        total: parsedAmount,
+        total: merchantFinalAmount,
         discount: 0,
         cashbackAmount: calculatedCashback,
-        finalAmount: parsedAmount,
+        finalAmount: merchantFinalAmount,
         isMerchantRide: isMerchant,
         merchantDiscount: merchantDiscountPercent,
         breakdown: {
@@ -835,8 +837,8 @@ export const requestRide = async (req, res) => {
           distance: `${totalDistance.toFixed(1)} km`,
           subtotal: `₹${parsedAmount}`,
           discount: '₹0',
-          cashback: isMerchant ? `₹${calculatedCashback} (${merchantDiscountPercent}% added to wallet after ride)` : '₹0',
-          total: `₹${parsedAmount}`
+          merchantSurcharge: isMerchant ? `+₹${calculatedCashback} (5% surcharge, returned as cashback after ride)` : '₹0',
+          total: `₹${merchantFinalAmount}`
         }
       };
     } else {
