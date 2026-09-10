@@ -10,23 +10,24 @@ import {
   rejectWithdrawalRequest,
   getWithdrawalStats
 } from '../controllers/customerWithdrawalController.js';
-import { verifyToken, verifyAdmin } from '../middleware/auth.js';
+import { customerAuthMiddleware } from '../middleware/customerAuthMiddleware.js';
+import adminAuth from '../middleware/adminAuth.js';
 
 const router = express.Router();
 
 // --- CUSTOMER ROUTES ---
 // Customers must be authenticated
-router.post('/request', verifyToken, createWithdrawalRequest);
-router.get('/my-requests', verifyToken, getMyWithdrawalRequests);
-router.post('/:id/cancel', verifyToken, cancelWithdrawalRequest);
+router.post('/request', customerAuthMiddleware, createWithdrawalRequest);
+router.get('/my-requests', customerAuthMiddleware, getMyWithdrawalRequests);
+router.post('/:id/cancel', customerAuthMiddleware, cancelWithdrawalRequest);
 
 // --- ADMIN ROUTES ---
 // Admins must be authenticated
-router.get('/admin/stats', verifyAdmin, getWithdrawalStats);
-router.get('/admin/all', verifyAdmin, getAllWithdrawalRequests);
-router.get('/admin/:id', verifyAdmin, getWithdrawalRequestById);
-router.put('/admin/:id/approve', verifyAdmin, approveWithdrawalRequest);
-router.put('/admin/:id/mark-paid', verifyAdmin, markWithdrawalPaid);
-router.put('/admin/:id/reject', verifyAdmin, rejectWithdrawalRequest);
+router.get('/admin/stats', adminAuth, getWithdrawalStats);
+router.get('/admin/all', adminAuth, getAllWithdrawalRequests);
+router.get('/admin/:id', adminAuth, getWithdrawalRequestById);
+router.put('/admin/:id/approve', adminAuth, approveWithdrawalRequest);
+router.put('/admin/:id/mark-paid', adminAuth, markWithdrawalPaid);
+router.put('/admin/:id/reject', adminAuth, rejectWithdrawalRequest);
 
 export default router;
