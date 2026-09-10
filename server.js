@@ -37,7 +37,7 @@ import adminPricingRoutes from './routes/adminPricingRoutes.js';
 import adminDashboardRoutes from './routes/adminDashboardRoutes.js';
 import packerBookingRoutes from './routes/packerBookingRoutes.js';
 import merchantRoutes from './routes/merchantRoutes.js';
-
+import customerWithdrawalRoutes from './routes/customerWithdrawalRoutes.js';
 dotenv.config();
 
 // ES module fix
@@ -203,7 +203,7 @@ app.use('/api/admin/dashboard', adminDashboardRoutes);
 app.use('/api/packers-movers', packerBookingRoutes);
 app.use('/api/merchant', merchantRoutes);
 app.use('/api/vehicles', vehicleRoutes);
-
+app.use('/api/withdrawals', customerWithdrawalRoutes);
 
 // ================== ❤️ HEALTH CHECK ==================
 
