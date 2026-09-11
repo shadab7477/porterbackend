@@ -1,6 +1,7 @@
 // controllers/merchantController.js
 import MerchantApplication from '../models/MerchantApplication.js';
 import Customer from '../models/Customer.js';
+import MerchantSettings from '../models/MerchantSettings.js';
 import { uploadToCloudinary } from '../config/cloudinary.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -518,5 +519,71 @@ export const rejectMerchantApplication = async (req, res) => {
   } catch (error) {
     console.error('rejectMerchantApplication error:', error);
     res.status(500).json({ success: false, message: 'Failed to reject application' });
+  }
+};
+
+// GET /api/merchant/admin/settings
+export const getMerchantSettings = async (req, res) => {
+  try {
+    const settings = await MerchantSettings.getSettings();
+    res.json({
+      success: true,
+      data: {
+        priceIncreasePercent: settings.priceIncreasePercent,
+        cashbackPercent: settings.cashbackPercent,
+        updatedAt: settings.updatedAt
+      }
+    });
+  } catch (error) {
+    console.error('getMerchantSettings error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch merchant settings' });
+  }
+};
+
+// PUT /api/merchant/admin/settings
+export const updateMerchantSettings = async (req, res) => {
+  try {
+    const { priceIncreasePercent, cashbackPercent } = req.body;
+
+    if (priceIncreasePercent === undefined && cashbackPercent === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide priceIncreasePercent or cashbackPercent'
+      });
+    }
+
+    const settings = await MerchantSettings.getSettings();
+
+    if (priceIncreasePercent !== undefined) {
+      const val = parseFloat(priceIncreasePercent);
+      if (isNaN(val) || val < 0 || val > 100) {
+        return res.status(400).json({ success: false, message: 'Price increase percent must be between 0 and 100' });
+      }
+      settings.priceIncreasePercent = val;
+    }
+
+    if (cashbackPercent !== undefined) {
+      const val = parseFloat(cashbackPercent);
+      if (isNaN(val) || val < 0 || val > 100) {
+        return res.status(400).json({ success: false, message: 'Cashback percent must be between 0 and 100' });
+      }
+      settings.cashbackPercent = val;
+    }
+
+    settings.updatedBy = req.admin?._id || null;
+    await settings.save();
+
+    res.json({
+      success: true,
+      message: `Merchant settings updated — Price increase: ${settings.priceIncreasePercent}%, Cashback: ${settings.cashbackPercent}%`,
+      data: {
+        priceIncreasePercent: settings.priceIncreasePercent,
+        cashbackPercent: settings.cashbackPercent,
+        updatedAt: settings.updatedAt
+      }
+    });
+  } catch (error) {
+    console.error('updateMerchantSettings error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update merchant settings' });
   }
 };

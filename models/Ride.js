@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import MerchantSettings from './MerchantSettings.js';
 
 const locationSchema = new mongoose.Schema({
   type: {
@@ -366,15 +367,25 @@ rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car'
 
   const roundedTotal = Math.round(totalFare);
 
-  // Apply merchant 5% price surcharge — increases ride price by 5%
-  // The surcharge amount is returned as cashback to customer wallet after ride completion
-  const MERCHANT_SURCHARGE_PERCENT = 5;
+  // Apply merchant price surcharge — increases ride price dynamically
+  // The cashback amount is returned to customer wallet after ride completion
+  let merchantPriceIncreasePercent = 5;
+  let merchantCashbackPercent = 5;
+  try {
+    const merchantSettings = await MerchantSettings.getSettings();
+    merchantPriceIncreasePercent = merchantSettings.priceIncreasePercent;
+    merchantCashbackPercent = merchantSettings.cashbackPercent;
+  } catch (err) {
+    console.error('Error fetching merchant settings, using defaults:', err);
+  }
+
   let cashbackAmount = 0;
   let finalAmount = roundedTotal;
 
   if (isMerchant) {
-    cashbackAmount = Math.round(roundedTotal * MERCHANT_SURCHARGE_PERCENT / 100);
-    finalAmount = roundedTotal + cashbackAmount; // price is 5% higher for merchants
+    const surchargeAmount = Math.round(roundedTotal * merchantPriceIncreasePercent / 100);
+    cashbackAmount = Math.round(roundedTotal * merchantCashbackPercent / 100);
+    finalAmount = roundedTotal + surchargeAmount; // price is increased for merchants
   }
 
   return {
@@ -384,14 +395,16 @@ rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car'
     cashbackAmount:   cashbackAmount,
     finalAmount,
     isMerchantRide:   isMerchant,
-    merchantDiscount: isMerchant ? MERCHANT_SURCHARGE_PERCENT : 0,
+    merchantDiscount: isMerchant ? merchantCashbackPercent : 0,
+    merchantPriceIncrease: isMerchant ? merchantPriceIncreasePercent : 0,
     breakdown: {
       baseFare:          `₹${baseFare}`,
       ratePerKm:         `₹${ratePerKm}/km`,
       distance:          `${distance.toFixed(1)} km`,
       subtotal:          `₹${Math.round(subtotal)}`,
       discount:          discountPercentage > 0 ? `₹${Math.round(discountAmount)} (${discountPercentage}% off for >10km)` : '₹0',
-      merchantSurcharge: isMerchant ? `+₹${cashbackAmount} (5% surcharge, returned as cashback after ride)` : '₹0',
+      merchantSurcharge: isMerchant ? `+₹${Math.round(roundedTotal * merchantPriceIncreasePercent / 100)} (${merchantPriceIncreasePercent}% surcharge)` : '₹0',
+      merchantCashback:  isMerchant ? `₹${cashbackAmount} (${merchantCashbackPercent}% cashback after ride)` : '₹0',
       total:             `₹${finalAmount}`
     }
   };

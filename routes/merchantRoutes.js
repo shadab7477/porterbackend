@@ -10,7 +10,9 @@ import {
   getMerchantApplicationById,
   verifyMerchantDocument,
   approveMerchantApplication,
-  rejectMerchantApplication
+  rejectMerchantApplication,
+  getMerchantSettings,
+  updateMerchantSettings
 } from '../controllers/merchantController.js';
 import { customerAuthMiddleware } from '../middleware/customerAuthMiddleware.js';
 import { authMiddleware } from '../middleware/authMiddleware.js';
@@ -56,5 +58,9 @@ router.put('/admin/applications/:id/approve', authMiddleware, approveMerchantApp
 
 // Reject entire application
 router.put('/admin/applications/:id/reject', authMiddleware, rejectMerchantApplication);
+
+// Merchant pricing settings (price increase % & cashback %)
+router.get('/admin/settings', authMiddleware, getMerchantSettings);
+router.put('/admin/settings', authMiddleware, updateMerchantSettings);
 
 export default router;

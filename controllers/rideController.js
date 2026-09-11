@@ -1,6 +1,7 @@
 import Ride from '../models/Ride.js';
 import Driver from '../models/Driver.js';
 import Customer from '../models/Customer.js';
+import MerchantSettings from '../models/MerchantSettings.js';
 import DriverApplication from '../models/DriverApplication.js';
 import CustomerWalletTransaction from '../models/CustomerWalletTransaction.js';
 import DriverWalletTransaction from '../models/DriverWalletTransaction.js';
@@ -815,14 +816,24 @@ export const requestRide = async (req, res) => {
 
     // Use fare amount from frontend if provided, otherwise calculate it
     const isMerchant = customer.isMerchant || false;
-    const merchantDiscountPercent = (isMerchant && customer.merchantDiscount) ? customer.merchantDiscount : (isMerchant ? 5 : 0);
+    let merchantPriceIncreasePercent = 5;
+    let merchantCashbackPercent = 5;
+    if (isMerchant) {
+      try {
+        const merchantSettings = await MerchantSettings.getSettings();
+        merchantPriceIncreasePercent = merchantSettings.priceIncreasePercent;
+        merchantCashbackPercent = merchantSettings.cashbackPercent;
+      } catch (err) {
+        console.error('Error fetching MerchantSettings in requestRide:', err);
+      }
+    }
     let fare;
     
     if (reqAmount) {
       const parsedAmount = parseFloat(reqAmount.toString().replace(/[^0-9.]/g, '')) || 0;
-      // Apply same merchant 5% surcharge as calculateFare: price goes up 5%, returned as cashback after ride
-      const calculatedCashback = isMerchant ? Math.round(parsedAmount * (merchantDiscountPercent / 100)) : 0;
-      const merchantFinalAmount = parsedAmount + calculatedCashback; // 5% added for merchants
+      const calculatedCashback = isMerchant ? Math.round(parsedAmount * (merchantCashbackPercent / 100)) : 0;
+      const merchantPriceIncrease = isMerchant ? Math.round(parsedAmount * (merchantPriceIncreasePercent / 100)) : 0;
+      const merchantFinalAmount = parsedAmount + merchantPriceIncrease;
       fare = {
         distanceFare: parsedAmount,
         total: merchantFinalAmount,
@@ -830,14 +841,15 @@ export const requestRide = async (req, res) => {
         cashbackAmount: calculatedCashback,
         finalAmount: merchantFinalAmount,
         isMerchantRide: isMerchant,
-        merchantDiscount: merchantDiscountPercent,
+        merchantDiscount: merchantCashbackPercent,
         breakdown: {
           baseFare: `₹${parsedAmount}`,
           ratePerKm: `Custom`,
           distance: `${totalDistance.toFixed(1)} km`,
           subtotal: `₹${parsedAmount}`,
           discount: '₹0',
-          merchantSurcharge: isMerchant ? `+₹${calculatedCashback} (5% surcharge, returned as cashback after ride)` : '₹0',
+          merchantSurcharge: isMerchant ? `+₹${merchantPriceIncrease} (${merchantPriceIncreasePercent}% surcharge)` : '₹0',
+          merchantCashback: isMerchant ? `₹${calculatedCashback} (${merchantCashbackPercent}% cashback after ride)` : '₹0',
           total: `₹${merchantFinalAmount}`
         }
       };
