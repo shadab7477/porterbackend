@@ -2,7 +2,7 @@
 import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
-import cors from 'cors';
+// cors package no longer used — CORS handled by manual middleware below
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -74,34 +74,21 @@ const isAllowedOrigin = (origin) => {
   return allowedOrigins.includes(origin);
 };
 
-// Manually set headers BEFORE cors() middleware so we override any NGINX-added headers.
-// This prevents the "multiple values" bug caused by NGINX also adding Access-Control-Allow-Origin.
+// Single CORS middleware — handles headers AND preflight in one place.
+// Do NOT also add CORS headers in NGINX, or the browser will see duplicates.
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (isAllowedOrigin(origin)) {
-    // setHeader always REPLACES (not appends), so only one value is ever sent.
-    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With');
   }
-  // Handle preflight immediately
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }
   next();
 });
-
-// cors() middleware kept for fallback compatibility
-const corsOptions = {
-  origin: (origin, callback) => {
-    if (isAllowedOrigin(origin)) return callback(null, true);
-    return callback(new Error("CORS not allowed: " + origin), false);
-  },
-  credentials: true
-};
-
-app.use(cors(corsOptions));
 
 
 // ================== 🔥 SOCKET.IO ==================
