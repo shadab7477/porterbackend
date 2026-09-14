@@ -78,7 +78,8 @@ const isAllowedOrigin = (origin) => {
 // Do NOT also add CORS headers in NGINX, or the browser will see duplicates.
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (isAllowedOrigin(origin)) {
+  // No origin = mobile app / server call / same-origin — CORS headers not needed
+  if (origin && isAllowedOrigin(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
