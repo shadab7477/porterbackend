@@ -9,6 +9,7 @@ import Customer from '../models/Customer.js';
 import Driver from '../models/Driver.js';
 import DriverApplication from '../models/DriverApplication.js';
 import MerchantApplication from '../models/MerchantApplication.js';
+import Ride from '../models/Ride.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -152,11 +153,40 @@ export const getWalletBalance = async (req, res) => {
             isCustomer ? { customerId: userId } : { driverId: userId }
         ).sort({ createdAt: -1 }).limit(20);
 
+        let todayEarnings = 0;
+        let totalEarnings = 0;
+        let totalDeliveries = 0;
+
+        if (!isCustomer) {
+            const startOfDay = new Date();
+            startOfDay.setHours(0, 0, 0, 0);
+
+            const driverRides = await Ride.find({
+                'driver.driverId': userId,
+                status: 'completed'
+            });
+
+            totalDeliveries = driverRides.length;
+
+            driverRides.forEach(ride => {
+                const earning = ride.fare?.driverEarning || 0;
+                totalEarnings += earning;
+                if (ride.rideCompletedAt && ride.rideCompletedAt >= startOfDay) {
+                    todayEarnings += earning;
+                } else if (!ride.rideCompletedAt && ride.updatedAt >= startOfDay) {
+                    todayEarnings += earning;
+                }
+            });
+        }
+
         res.json({
             success: true,
             data: {
                 balance: wallet.balance,
-                transactions
+                transactions,
+                todayEarnings,
+                totalEarnings,
+                totalDeliveries
             }
         });
 
