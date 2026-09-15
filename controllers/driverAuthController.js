@@ -5,6 +5,7 @@ import OTP from '../models/OTP.js';
 import { uploadToCloudinary } from '../config/cloudinary.js';
 import { generateOTP, sendSmsOtp } from '../utils/smsService.js';
 import DriverWallet from '../models/DriverWallet.js';
+import Ride from '../models/Ride.js';
 
 // Generate driver auth token (long-lived token for authenticated drivers)
 const generateDriverToken = (driverId, phone, isVerified = false) => {
@@ -1137,6 +1138,34 @@ export const getDriverProfile = async (req, res) => {
       if (wallet) walletBalance = wallet.balance;
     } catch (err) {}
 
+    let todayEarnings = 0;
+    let weeklyEarnings = 0;
+    let monthlyEarnings = 0;
+
+    try {
+      const now = new Date();
+      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const startOfWeek = new Date(startOfDay);
+      startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+      const driverRides = await Ride.find({
+          'driver.driverId': driver._id,
+          status: 'completed'
+      });
+
+      driverRides.forEach(ride => {
+          const earning = ride.fare?.driverEarning || 0;
+          const completedTime = ride.rideCompletedAt || ride.updatedAt;
+          
+          if (completedTime >= startOfDay) todayEarnings += earning;
+          if (completedTime >= startOfWeek) weeklyEarnings += earning;
+          if (completedTime >= startOfMonth) monthlyEarnings += earning;
+      });
+    } catch (err) {
+      console.error('Error fetching driver earnings:', err);
+    }
+
     const profileData = {
       id: driver._id,
       driverId: driver.driverId,
@@ -1155,6 +1184,12 @@ export const getDriverProfile = async (req, res) => {
         totalTrips: driver.totalTrips,
         rating: driver.rating,
         walletBalance: walletBalance
+      },
+      earnings: {
+        today: todayEarnings,
+        week: weeklyEarnings,
+        month: monthlyEarnings,
+        trips: driver.totalTrips
       },
       subscription: driver.subscription,
       applicationDetails: application ? {

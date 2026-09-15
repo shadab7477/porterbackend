@@ -154,12 +154,19 @@ export const getWalletBalance = async (req, res) => {
         ).sort({ createdAt: -1 }).limit(20);
 
         let todayEarnings = 0;
+        let weeklyEarnings = 0;
+        let monthlyEarnings = 0;
         let totalEarnings = 0;
         let totalDeliveries = 0;
 
         if (!isCustomer) {
-            const startOfDay = new Date();
-            startOfDay.setHours(0, 0, 0, 0);
+            const now = new Date();
+            const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            
+            const startOfWeek = new Date(startOfDay);
+            startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
+            
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
             const driverRides = await Ride.find({
                 'driver.driverId': userId,
@@ -171,10 +178,17 @@ export const getWalletBalance = async (req, res) => {
             driverRides.forEach(ride => {
                 const earning = ride.fare?.driverEarning || 0;
                 totalEarnings += earning;
-                if (ride.rideCompletedAt && ride.rideCompletedAt >= startOfDay) {
+                
+                const completedTime = ride.rideCompletedAt || ride.updatedAt;
+                
+                if (completedTime >= startOfDay) {
                     todayEarnings += earning;
-                } else if (!ride.rideCompletedAt && ride.updatedAt >= startOfDay) {
-                    todayEarnings += earning;
+                }
+                if (completedTime >= startOfWeek) {
+                    weeklyEarnings += earning;
+                }
+                if (completedTime >= startOfMonth) {
+                    monthlyEarnings += earning;
                 }
             });
         }
@@ -185,6 +199,8 @@ export const getWalletBalance = async (req, res) => {
                 balance: wallet.balance,
                 transactions,
                 todayEarnings,
+                weeklyEarnings,
+                monthlyEarnings,
                 totalEarnings,
                 totalDeliveries
             }

@@ -1651,7 +1651,7 @@ export const completeRide = async (req, res) => {
     }
 
     driver.totalTrips += 1;
-    driver.totalEarnings += ride.fare.finalAmount;
+    driver.totalEarnings += driverEarning;
     driver.isAvailable = true;
     await driver.save();
 
@@ -2669,7 +2669,7 @@ export const getDriverRideHistory = async (req, res) => {
       {
         $group: {
           _id: null,
-          totalEarnings: { $sum: '$fare.finalAmount' },
+          totalEarnings: { $sum: '$fare.driverEarning' },
           totalRides: { $sum: 1 },
           averageRating: { $avg: '$customerRating.rating' }
         }
