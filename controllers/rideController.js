@@ -828,34 +828,43 @@ export const requestRide = async (req, res) => {
         console.error('Error fetching MerchantSettings in requestRide:', err);
       }
     }
-    let fare;
+
+    // Always calculate the accurate fare first
+    let fare = await Ride.calculateFare(totalDistance, vehicleType, isMerchant);
     
+    // If frontend sent a custom amount, use it (and reverse-engineer the breakdown so we don't double charge)
     if (reqAmount) {
       const parsedAmount = parseFloat(reqAmount.toString().replace(/[^0-9.]/g, '')) || 0;
-      const calculatedCashback = isMerchant ? Math.round(parsedAmount * (merchantCashbackPercent / 100)) : 0;
-      const merchantPriceIncrease = isMerchant ? Math.round(parsedAmount * (merchantPriceIncreasePercent / 100)) : 0;
-      const merchantFinalAmount = parsedAmount + merchantPriceIncrease;
-      fare = {
-        distanceFare: parsedAmount,
-        total: merchantFinalAmount,
-        discount: 0,
-        cashbackAmount: calculatedCashback,
-        finalAmount: merchantFinalAmount,
-        isMerchantRide: isMerchant,
-        merchantDiscount: merchantCashbackPercent,
-        breakdown: {
-          baseFare: `₹${parsedAmount}`,
-          ratePerKm: `Custom`,
-          distance: `${totalDistance.toFixed(1)} km`,
-          subtotal: `₹${parsedAmount}`,
-          discount: '₹0',
-          merchantSurcharge: isMerchant ? `+₹${merchantPriceIncrease} (${merchantPriceIncreasePercent}% surcharge)` : '₹0',
-          merchantCashback: isMerchant ? `₹${calculatedCashback} (${merchantCashbackPercent}% cashback after ride)` : '₹0',
-          total: `₹${merchantFinalAmount}`
-        }
-      };
-    } else {
-      fare = await Ride.calculateFare(totalDistance, vehicleType, isMerchant);
+      
+      // If the frontend amount differs from our calculation, it's a custom override
+      if (Math.abs(parsedAmount - fare.finalAmount) > 2) {
+        const baseDistanceFare = isMerchant 
+          ? Math.round(parsedAmount / (1 + merchantPriceIncreasePercent / 100))
+          : parsedAmount;
+          
+        const merchantPriceIncrease = parsedAmount - baseDistanceFare;
+        const calculatedCashback = isMerchant ? Math.round(baseDistanceFare * (merchantCashbackPercent / 100)) : 0;
+        
+        fare = {
+          distanceFare: baseDistanceFare,
+          total: parsedAmount,
+          discount: 0,
+          cashbackAmount: calculatedCashback,
+          finalAmount: parsedAmount,
+          isMerchantRide: isMerchant,
+          merchantDiscount: merchantCashbackPercent,
+          breakdown: {
+            baseFare: `₹${baseDistanceFare}`,
+            ratePerKm: `Custom`,
+            distance: `${totalDistance.toFixed(1)} km`,
+            subtotal: `₹${baseDistanceFare}`,
+            discount: '₹0',
+            merchantSurcharge: isMerchant ? `+₹${merchantPriceIncrease} (${merchantPriceIncreasePercent}% surcharge)` : '₹0',
+            merchantCashback: isMerchant ? `₹${calculatedCashback} (${merchantCashbackPercent}% cashback after ride)` : '₹0',
+            total: `₹${parsedAmount}`
+          }
+        };
+      }
     }
 
 
