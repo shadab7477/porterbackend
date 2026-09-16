@@ -326,9 +326,32 @@ rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car'
   try {
     const Vehicle = mongoose.model('Vehicle');
     const vehicle = await Vehicle.findOne({ vehicleType: vehicleType.toLowerCase() });
+    
     if (vehicle && vehicle.isActive) {
-      baseFare = vehicle.baseFare || baseFare;
-      ratePerKm = vehicle.pricePerKm || ratePerKm;
+      const vType = vehicleType.toLowerCase();
+      
+      if (['bike', 'scooty', 'scooter'].includes(vType)) {
+        baseFare = 0;
+        
+        let calcDistance = distance < 1 ? 1 : distance;
+        let bucket = Math.floor(calcDistance);
+        if (bucket > 13) bucket = 13;
+        
+        // Use slab rate if available, fallback to vehicle.pricePerKm
+        let slabRate = 0;
+        if (vehicle.slabRates && vehicle.slabRates[`price${bucket}km`]) {
+           slabRate = vehicle.slabRates[`price${bucket}km`];
+        }
+        
+        if (slabRate > 0) {
+           ratePerKm = slabRate;
+        } else {
+           ratePerKm = vehicle.pricePerKm || ratePerKm;
+        }
+      } else {
+        baseFare = vehicle.baseFare || baseFare;
+        ratePerKm = vehicle.pricePerKm || ratePerKm;
+      }
     } else {
       // Fallback hardcoded rates for existing app compatibility
       const vType = vehicleType.toLowerCase();

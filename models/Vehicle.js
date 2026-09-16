@@ -39,6 +39,21 @@ const vehicleSchema = new mongoose.Schema({
     min: 0,
     default: 0
   },
+  slabRates: {
+    price1km: { type: Number, default: 0 },
+    price2km: { type: Number, default: 0 },
+    price3km: { type: Number, default: 0 },
+    price4km: { type: Number, default: 0 },
+    price5km: { type: Number, default: 0 },
+    price6km: { type: Number, default: 0 },
+    price7km: { type: Number, default: 0 },
+    price8km: { type: Number, default: 0 },
+    price9km: { type: Number, default: 0 },
+    price10km: { type: Number, default: 0 },
+    price11km: { type: Number, default: 0 },
+    price12km: { type: Number, default: 0 },
+    price13km: { type: Number, default: 0 }
+  },
   capacity: {
     type: Number,
     required: [true, 'Capacity is required'],

@@ -64,6 +64,7 @@ export const createVehicle = async (req, res) => {
       pricePerKm,
       mainPricePerKm,   // NEW
       subscriptionFee,
+      slabRates,        // NEW
       capacity,
       weight,
       description
@@ -82,6 +83,7 @@ export const createVehicle = async (req, res) => {
       pricePerKm,
       mainPricePerKm: mainPricePerKm !== undefined ? Number(mainPricePerKm) : 0, // NEW
       subscriptionFee: subscriptionFee !== undefined ? Number(subscriptionFee) : 0,
+      slabRates, // NEW
       capacity,
       weight,
       description
