@@ -21,7 +21,7 @@ router.get('/', optionalAuthMiddleware, getAllVehicles);
 router.get('/active', optionalAuthMiddleware, getActiveVehicles);
 router.get('/type/:type', getVehicleByType);
 router.get('/:id', getVehicleById);
-router.post('/calculate-fare', calculateFare);
+router.post('/calculate-fare', optionalAuthMiddleware, calculateFare);
 
 // Protected routes (auth required)
 router.post('/', authMiddleware, createVehicle);

@@ -10,8 +10,8 @@ export const getAllVehicles = async (req, res) => {
     
     if (isActive !== undefined) query.isActive = isActive === 'true';
     
-    let isMerchant = false;
-    if (req.customerId) {
+    let isMerchant = req.isMerchant || false;
+    if (req.customerId && req.isMerchant === undefined) {
       const customer = await Customer.findById(req.customerId).lean();
       if (customer && customer.isMerchant) {
         isMerchant = true;
@@ -27,8 +27,9 @@ export const getAllVehicles = async (req, res) => {
     const total = await Vehicle.countDocuments(query);
     
     if (distance) {
-      const distanceInKm = parseFloat(distance);
+      let distanceInKm = parseFloat(distance);
       if (!isNaN(distanceInKm)) {
+        if (distanceInKm < 1) distanceInKm = 1;
         vehicles = await Promise.all(vehicles.map(async (v) => {
           const fare = await Ride.calculateFare(distanceInKm, v.vehicleType, isMerchant);
           return {
@@ -191,6 +192,14 @@ export const calculateFare = async (req, res) => {
   try {
     const { vehicleType, distance } = req.body;
     
+    let isMerchant = req.isMerchant || false;
+    if (req.customerId && req.isMerchant === undefined) {
+      const customer = await Customer.findById(req.customerId).lean();
+      if (customer && customer.isMerchant) {
+        isMerchant = true;
+      }
+    }
+    
     // We'll allow vehicleType to be optional. If provided, we return its specific calculation as primary.
     // Otherwise we just default to the first active vehicle.
     let targetVehicleType = vehicleType;
@@ -207,7 +216,10 @@ export const calculateFare = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Vehicle not found' });
     }
     
-    const distanceInKm = parseFloat(distance);
+    let distanceInKm = parseFloat(distance);
+    if (!isNaN(distanceInKm) && distanceInKm < 1) {
+      distanceInKm = 1;
+    }
     let total = 0;
     let baseFare = vehicle.baseFare;
     let ratePerKm = vehicle.pricePerKm;
@@ -356,8 +368,8 @@ export const getActiveVehicles = async (req, res) => {
   try {
     const { distance } = req.query;
     
-    let isMerchant = false;
-    if (req.customerId) {
+    let isMerchant = req.isMerchant || false;
+    if (req.customerId && req.isMerchant === undefined) {
       const customer = await Customer.findById(req.customerId).lean();
       if (customer && customer.isMerchant) {
         isMerchant = true;
@@ -367,8 +379,9 @@ export const getActiveVehicles = async (req, res) => {
     let vehicles = await Vehicle.find({ isActive: true }).sort({ name: 1 }).lean();
     
     if (distance) {
-      const distanceInKm = parseFloat(distance);
+      let distanceInKm = parseFloat(distance);
       if (!isNaN(distanceInKm)) {
+        if (distanceInKm < 1) distanceInKm = 1;
         vehicles = await Promise.all(vehicles.map(async (v) => {
           const fare = await Ride.calculateFare(distanceInKm, v.vehicleType, isMerchant);
           return {

@@ -27,7 +27,8 @@ export const authMiddleware = (req, res, next) => {
     }
     else if (decoded.role === 'customer' || decoded.role === 'customer_auth') {
       req.customerId = decoded.id;
-      console.log('🔐 Customer authenticated:', { customerId: req.customerId });
+      req.isMerchant = decoded.isMerchant === true;
+      console.log('🔐 Customer authenticated:', { customerId: req.customerId, isMerchant: req.isMerchant });
     }
     else {
       // Default - store as adminId for backward compatibility
@@ -69,6 +70,7 @@ export const optionalAuthMiddleware = (req, res, next) => {
       }
       else if (decoded.role === 'customer' || decoded.role === 'customer_auth') {
         req.customerId = decoded.id;
+        req.isMerchant = decoded.isMerchant === true;
       }
     }
     

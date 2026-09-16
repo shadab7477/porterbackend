@@ -320,6 +320,7 @@ rideSchema.methods.updateStatus = function (status, metadata = {}) {
 
 // Static method to calculate fare — new pricing logic with baseFare, perKmAdd, and pricePerKm
 rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car', isMerchant = false) {
+  if (distance < 1) distance = 1;
   let baseFare = 0;
   let ratePerKm = 15;
   let vehicleDiscount = 0;
