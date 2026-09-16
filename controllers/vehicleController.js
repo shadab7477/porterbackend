@@ -10,8 +10,8 @@ export const getAllVehicles = async (req, res) => {
     
     if (isActive !== undefined) query.isActive = isActive === 'true';
     
-    let isMerchant = req.isMerchant || false;
-    if (req.customerId && req.isMerchant === undefined) {
+    let isMerchant = false;
+    if (req.customerId) {
       const customer = await Customer.findById(req.customerId).lean();
       if (customer && customer.isMerchant) {
         isMerchant = true;
@@ -192,8 +192,8 @@ export const calculateFare = async (req, res) => {
   try {
     const { vehicleType, distance } = req.body;
     
-    let isMerchant = req.isMerchant || false;
-    if (req.customerId && req.isMerchant === undefined) {
+    let isMerchant = false;
+    if (req.customerId) {
       const customer = await Customer.findById(req.customerId).lean();
       if (customer && customer.isMerchant) {
         isMerchant = true;
@@ -368,8 +368,8 @@ export const getActiveVehicles = async (req, res) => {
   try {
     const { distance } = req.query;
     
-    let isMerchant = req.isMerchant || false;
-    if (req.customerId && req.isMerchant === undefined) {
+    let isMerchant = false;
+    if (req.customerId) {
       const customer = await Customer.findById(req.customerId).lean();
       if (customer && customer.isMerchant) {
         isMerchant = true;

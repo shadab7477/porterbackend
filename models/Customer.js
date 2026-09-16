@@ -101,8 +101,7 @@ customerSchema.methods.generateAuthToken = function () {
     {
       id: this._id,
       phone: this.phone,
-      role: 'customer',
-      isMerchant: this.isMerchant === true
+      role: 'customer'
     },
     process.env.JWT_SECRET
   );
