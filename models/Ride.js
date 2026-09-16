@@ -322,6 +322,8 @@ rideSchema.methods.updateStatus = function (status, metadata = {}) {
 rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car', isMerchant = false) {
   let baseFare = 0;
   let ratePerKm = 15;
+  let vehicleDiscount = 0;
+  let mainPricePerKm = 0;
 
   try {
     const Vehicle = mongoose.model('Vehicle');
@@ -329,6 +331,9 @@ rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car'
     
     if (vehicle && vehicle.isActive) {
       const vType = vehicleType.toLowerCase();
+      vehicleDiscount = vehicle.discount || 0;
+      mainPricePerKm = vehicle.mainPricePerKm || 0;
+      
       
       if (['bike', 'scooty', 'scooter'].includes(vType)) {
         baseFare = 0;
@@ -371,18 +376,30 @@ rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car'
     console.error('Error fetching vehicle pricing:', err);
   }
 
-  let totalFare = baseFare + (distance * ratePerKm);
+  let totalFare = 0;
+  if (!['bike', 'scooty', 'scooter'].includes(vehicleType.toLowerCase()) && distance > 5 && mainPricePerKm > 0) {
+    totalFare = distance * mainPricePerKm;
+    baseFare = 0; // nullify base fare in the breakdown
+    ratePerKm = mainPricePerKm; // reflect main price in the breakdown
+  } else {
+    totalFare = baseFare + (distance * ratePerKm);
+  }
+
   let subtotal = totalFare;
   
   let discountPercentage = 0;
   let discountAmount = 0;
   
   if (distance > 10) {
-    const vType = vehicleType.toLowerCase();
-    if (['bike', 'scooty', 'scooter'].includes(vType)) {
-      discountPercentage = 12;
+    if (vehicleDiscount > 0) {
+      discountPercentage = vehicleDiscount;
     } else {
-      discountPercentage = 15;
+      const vType = vehicleType.toLowerCase();
+      if (['bike', 'scooty', 'scooter'].includes(vType)) {
+        discountPercentage = 12;
+      } else {
+        discountPercentage = 15;
+      }
     }
     discountAmount = totalFare * (discountPercentage / 100);
     totalFare -= discountAmount;

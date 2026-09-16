@@ -83,6 +83,7 @@ export const createVehicle = async (req, res) => {
       slabRates,        // NEW
       capacity,
       weight,
+      discount,
       description
     } = req.body;
     
@@ -99,6 +100,7 @@ export const createVehicle = async (req, res) => {
       pricePerKm,
       mainPricePerKm: mainPricePerKm !== undefined ? Number(mainPricePerKm) : 0, // NEW
       subscriptionFee: subscriptionFee !== undefined ? Number(subscriptionFee) : 0,
+      discount: discount !== undefined ? Number(discount) : 0,
       slabRates, // NEW
       capacity,
       weight,
@@ -129,6 +131,11 @@ export const updateVehicle = async (req, res) => {
     // Convert subscriptionFee to number if present
     if (updateData.subscriptionFee !== undefined) {
       updateData.subscriptionFee = Number(updateData.subscriptionFee);
+    }
+    
+    // Convert discount to number if present
+    if (updateData.discount !== undefined) {
+      updateData.discount = Number(updateData.discount);
     }
     
     const vehicle = await Vehicle.findByIdAndUpdate(
@@ -214,7 +221,13 @@ export const calculateFare = async (req, res) => {
       
       total = distanceInKm * ratePerKm;
     } else {
-      total = baseFare + (distanceInKm * ratePerKm);
+      if (distanceInKm > 5 && vehicle.mainPricePerKm > 0) {
+        total = distanceInKm * vehicle.mainPricePerKm;
+        baseFare = 0;
+        ratePerKm = vehicle.mainPricePerKm;
+      } else {
+        total = baseFare + (distanceInKm * ratePerKm);
+      }
     }
     
     let subtotal = total;
@@ -222,11 +235,15 @@ export const calculateFare = async (req, res) => {
     let discountAmount = 0;
     
     if (distanceInKm > 10) {
-      const vType = vehicle.vehicleType.toLowerCase();
-      if (['bike', 'scooty', 'scooter'].includes(vType)) {
-        discountPercentage = 12;
+      if (vehicle.discount && vehicle.discount > 0) {
+        discountPercentage = vehicle.discount;
       } else {
-        discountPercentage = 15;
+        const vType = vehicle.vehicleType.toLowerCase();
+        if (['bike', 'scooty', 'scooter'].includes(vType)) {
+          discountPercentage = 12;
+        } else {
+          discountPercentage = 15;
+        }
       }
       discountAmount = total * (discountPercentage / 100);
       total -= discountAmount;
@@ -255,7 +272,13 @@ export const calculateFare = async (req, res) => {
         }
         vTotal = distanceInKm * vRatePerKm;
       } else {
-        vTotal = vBaseFare + (distanceInKm * vRatePerKm);
+        if (distanceInKm > 5 && v.mainPricePerKm > 0) {
+          vTotal = distanceInKm * v.mainPricePerKm;
+          vBaseFare = 0;
+          vRatePerKm = v.mainPricePerKm;
+        } else {
+          vTotal = vBaseFare + (distanceInKm * vRatePerKm);
+        }
       }
       
       let vSubtotal = vTotal;
@@ -263,10 +286,14 @@ export const calculateFare = async (req, res) => {
       let vDiscountAmount = 0;
       
       if (distanceInKm > 10) {
-        if (['bike', 'scooty', 'scooter'].includes(vt)) {
-          vDiscountPercentage = 12;
+        if (v.discount && v.discount > 0) {
+          vDiscountPercentage = v.discount;
         } else {
-          vDiscountPercentage = 15;
+          if (['bike', 'scooty', 'scooter'].includes(vt)) {
+            vDiscountPercentage = 12;
+          } else {
+            vDiscountPercentage = 15;
+          }
         }
         vDiscountAmount = vTotal * (vDiscountPercentage / 100);
         vTotal -= vDiscountAmount;

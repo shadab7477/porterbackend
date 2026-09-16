@@ -4,10 +4,10 @@ async function testFare() {
   try {
     const res = await axios.get('http://127.0.0.1:5001/api/rides/fare-estimate', {
       params: {
-        pickupLat: 22.77019719228216,
-        pickupLon: 75.8990738497349,
-        dropLat: 22.745581997175826,
-        dropLon: 75.90371147905188,
+        pickupLat: 22.7196,
+        pickupLon: 75.8577,
+        dropLat: 22.7800,
+        dropLon: 75.8577,
         vehicleType: 'scooter'
       }
     });

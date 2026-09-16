@@ -39,6 +39,12 @@ const vehicleSchema = new mongoose.Schema({
     min: 0,
     default: 0
   },
+  discount: {
+    type: Number,
+    min: 0,
+    max: 100,
+    default: 0
+  },
   slabRates: {
     price1km: { type: Number, default: 0 },
     price2km: { type: Number, default: 0 },
