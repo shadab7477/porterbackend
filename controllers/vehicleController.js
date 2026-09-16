@@ -165,7 +165,30 @@ export const calculateFare = async (req, res) => {
     }
     
     const distanceInKm = parseFloat(distance);
-    let total = vehicle.baseFare + (distanceInKm * vehicle.pricePerKm);
+    let total = 0;
+    let baseFare = vehicle.baseFare;
+    let ratePerKm = vehicle.pricePerKm;
+    
+    const vType = vehicle.vehicleType.toLowerCase();
+    if (['bike', 'scooty', 'scooter'].includes(vType)) {
+      baseFare = 0;
+      let calcDistance = distanceInKm < 1 ? 1 : distanceInKm;
+      let bucket = Math.floor(calcDistance);
+      if (bucket > 13) bucket = 13;
+      
+      let slabRate = 0;
+      if (vehicle.slabRates && vehicle.slabRates[`price${bucket}km`]) {
+         slabRate = vehicle.slabRates[`price${bucket}km`];
+      }
+      
+      if (slabRate > 0) {
+         ratePerKm = slabRate;
+      }
+      
+      total = distanceInKm * ratePerKm;
+    } else {
+      total = baseFare + (distanceInKm * ratePerKm);
+    }
     
     let subtotal = total;
     let discountPercentage = 0;
@@ -190,8 +213,8 @@ export const calculateFare = async (req, res) => {
         mainPricePerKm: vehicle.mainPricePerKm,   // NEW (optional)
         breakdown: {
           distance: distanceInKm,
-          baseFare: vehicle.baseFare,
-          pricePerKm: vehicle.pricePerKm,
+          baseFare: baseFare,
+          pricePerKm: ratePerKm,
           subtotal: Math.round(subtotal * 100) / 100,
           discountAmount: Math.round(discountAmount * 100) / 100,
           discountPercentage,
