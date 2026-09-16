@@ -1629,6 +1629,32 @@ export const completeRide = async (req, res) => {
     const previousBalance = driverWallet.balance;
     driverWallet.balance += transactionAmount;
 
+    // Reset today/weekly collection if needed
+    const now = new Date();
+    const lastDate = driverWallet.lastCollectionDate || new Date(0);
+    
+    if (now.toDateString() !== lastDate.toDateString()) {
+        driverWallet.todayCollection = 0;
+    }
+    
+    const getStartOfWeek = (d) => {
+        const date = new Date(d);
+        const day = date.getDay();
+        const diff = date.getDate() - day; // Adjust to Sunday
+        return new Date(date.setDate(diff)).setHours(0,0,0,0);
+    };
+
+    if (getStartOfWeek(now) !== getStartOfWeek(lastDate)) {
+        driverWallet.weeklyCollection = 0;
+    }
+
+    const currentCollection = ride.paymentMethod === 'cash' ? ride.fare.finalAmount : 0;
+    
+    driverWallet.todayCollection = (driverWallet.todayCollection || 0) + currentCollection;
+    driverWallet.weeklyCollection = (driverWallet.weeklyCollection || 0) + currentCollection;
+    driverWallet.totalCollection = (driverWallet.totalCollection || 0) + currentCollection;
+    driverWallet.lastCollectionDate = now;
+
     // Dynamic Due Limits based on vehicle
     const dueLimits = {
       bike: 300,

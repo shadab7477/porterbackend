@@ -23,16 +23,16 @@
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">54.2% </span>
+                <span class="strong">53.7% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>58/107</span>
+                <span class='fraction'>58/108</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">46.34% </span>
+                <span class="strong">45.23% </span>
                 <span class="quiet">Branches</span>
-                <span class='fraction'>38/82</span>
+                <span class='fraction'>38/84</span>
             </div>
         
             
@@ -44,9 +44,9 @@
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">54.2% </span>
+                <span class="strong">53.7% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>58/107</span>
+                <span class='fraction'>58/108</span>
             </div>
         
             
@@ -373,7 +373,11 @@
 <a name='L308'></a><a href='#L308'>308</a>
 <a name='L309'></a><a href='#L309'>309</a>
 <a name='L310'></a><a href='#L310'>310</a>
-<a name='L311'></a><a href='#L311'>311</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<a name='L311'></a><a href='#L311'>311</a>
+<a name='L312'></a><a href='#L312'>312</a>
+<a name='L313'></a><a href='#L313'>313</a>
+<a name='L314'></a><a href='#L314'>314</a>
+<a name='L315'></a><a href='#L315'>315</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -448,6 +452,9 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -520,6 +527,7 @@
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -736,7 +744,7 @@ const resolveDriverApplication = async (id, phone) =&gt; {
 &nbsp;
 // ─── GET SUBSCRIPTION FEE ────────────────────────────────────────────────────
 // GET /api/driver/subscription/fee?vehicleType=bike
-export const getSubscriptionFee = <span class="fstat-no" title="function not covered" >as</span>ync (req, res) =&gt; {
+export const getMainPricePerKm = <span class="fstat-no" title="function not covered" >as</span>ync (req, res) =&gt; {
 <span class="cstat-no" title="statement not covered" >  try {</span>
     const { vehicleType } = <span class="cstat-no" title="statement not covered" >req.query;</span>
 &nbsp;
@@ -756,16 +764,19 @@ export const getSubscriptionFee = <span class="fstat-no" title="function not cov
       });
     }
 &nbsp;
+    const subscriptionFee = <span class="cstat-no" title="statement not covered" >vehicle.subscriptionFee ?? 0;</span>
+&nbsp;
 <span class="cstat-no" title="statement not covered" >    return res.json({</span>
       success: true,
       data: {
         vehicleType: vehicle.vehicleType,
         vehicleName: vehicle.name,
-        subscriptionFee: vehicle.subscriptionFee ?? 0,
+        mainPricePerKm: vehicle.mainPricePerKm ?? 0,
+        subscriptionFee: subscriptionFee,
       }
     });
   } catch (error) {
-<span class="cstat-no" title="statement not covered" >    console.error('getSubscriptionFee error:', error);</span>
+<span class="cstat-no" title="statement not covered" >    console.error('getMainPricePerKm error:', error);</span>
 <span class="cstat-no" title="statement not covered" >    res.status(500).json({ success: false, message: 'Failed to get subscription fee' });</span>
   }
 };
@@ -800,7 +811,7 @@ export const createSubscriptionOrder = async (req, res) =&gt; {
         alreadyPaid: true,
         message: 'Subscription fee already paid',
         data: {
-          subscriptionFee: application.subscriptionPayment.amount,
+          mainPricePerKm: application.subscriptionPayment.amount,
           paidAt: application.subscriptionPayment.paidAt,
         }
       });
@@ -835,6 +846,7 @@ export const createSubscriptionOrder = async (req, res) =&gt; {
         message: 'No subscription fee required for this vehicle type',
         data: {
           applicationId: application._id,
+          mainPricePerKm: 0,
           subscriptionFee: 0
         }
       });
@@ -948,7 +960,7 @@ export const verifySubscriptionPayment = async (req, res) =&gt; {
         applicationId: application._id,
         driverId: application.driverId,
         phone: application.phone,
-        subscriptionFee: application.subscriptionPayment.amount,
+        mainPricePerKm: application.subscriptionPayment.amount,
         paidAt: application.subscriptionPayment.paidAt,
         verificationStatus: application.verificationStatus,
       }
@@ -1000,7 +1012,7 @@ export const getSubscriptionStatus = async (req, res) =&gt; {
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-06-22T09:58:51.934Z
+                at 2026-09-16T06:47:23.567Z
             </div>
         <script src="../prettify.js"></script>
         <script>

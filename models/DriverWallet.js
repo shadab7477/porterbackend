@@ -11,6 +11,22 @@ const driverWalletSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    todayCollection: {
+        type: Number,
+        default: 0
+    },
+    weeklyCollection: {
+        type: Number,
+        default: 0
+    },
+    totalCollection: {
+        type: Number,
+        default: 0
+    },
+    lastCollectionDate: {
+        type: Date,
+        default: Date.now
+    },
     createdAt: {
         type: Date,
         default: Date.now

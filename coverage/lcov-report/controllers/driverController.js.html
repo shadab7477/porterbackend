@@ -23,16 +23,16 @@
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">7.19% </span>
+                <span class="strong">7.01% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>19/264</span>
+                <span class='fraction'>19/271</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
                 <span class="strong">0% </span>
                 <span class="quiet">Branches</span>
-                <span class='fraction'>0/131</span>
+                <span class='fraction'>0/148</span>
             </div>
         
             
@@ -44,9 +44,9 @@
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">7.39% </span>
+                <span class="strong">7.16% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>19/257</span>
+                <span class='fraction'>19/265</span>
             </div>
         
             
@@ -917,7 +917,18 @@
 <a name='L852'></a><a href='#L852'>852</a>
 <a name='L853'></a><a href='#L853'>853</a>
 <a name='L854'></a><a href='#L854'>854</a>
-<a name='L855'></a><a href='#L855'>855</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<a name='L855'></a><a href='#L855'>855</a>
+<a name='L856'></a><a href='#L856'>856</a>
+<a name='L857'></a><a href='#L857'>857</a>
+<a name='L858'></a><a href='#L858'>858</a>
+<a name='L859'></a><a href='#L859'>859</a>
+<a name='L860'></a><a href='#L860'>860</a>
+<a name='L861'></a><a href='#L861'>861</a>
+<a name='L862'></a><a href='#L862'>862</a>
+<a name='L863'></a><a href='#L863'>863</a>
+<a name='L864'></a><a href='#L864'>864</a>
+<a name='L865'></a><a href='#L865'>865</a>
+<a name='L866'></a><a href='#L866'>866</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -1162,6 +1173,17 @@
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
@@ -2015,7 +2037,18 @@ export const getAllDrivers = <span class="fstat-no" title="function not covered"
 <span class="cstat-no" title="statement not covered" >    if (status === 'busy') <span class="cstat-no" title="statement not covered" >query.isAvailable = false;</span></span>
 <span class="cstat-no" title="statement not covered" >    if (status === 'online') <span class="cstat-no" title="statement not covered" >query.isOnline = true;</span></span>
 <span class="cstat-no" title="statement not covered" >    if (status === 'offline') <span class="cstat-no" title="statement not covered" >query.isOnline = false;</span></span>
-<span class="cstat-no" title="statement not covered" >    if (vehicleType) <span class="cstat-no" title="statement not covered" >query.vehicleType = vehicleType;</span></span>
+<span class="cstat-no" title="statement not covered" >    if (vehicleType &amp;&amp; vehicleType !== 'all') {</span>
+      const vLower = <span class="cstat-no" title="statement not covered" >vehicleType.trim().toLowerCase();</span>
+<span class="cstat-no" title="statement not covered" >      if (vLower === '2_wheelers' || vLower === '2 wheelers' || vLower === '2wheeler') {</span>
+<span class="cstat-no" title="statement not covered" >        query.vehicleType = { $regex: /bike|scoot/i };</span>
+      } else <span class="cstat-no" title="statement not covered" >if (vLower === '3_wheelers' || vLower === '3 wheelers' || vLower === '3wheeler') {</span>
+<span class="cstat-no" title="statement not covered" >        query.vehicleType = { $regex: /3_wheeler|auto|loader|mini_3w|3 wheeler/i };</span>
+      } else <span class="cstat-no" title="statement not covered" >if (vLower === '4_wheelers' || vLower === '4 wheelers' || vLower === '4wheeler') {</span>
+<span class="cstat-no" title="statement not covered" >        query.vehicleType = { $regex: /tata_ace|4_wheeler|car|truck|pickup|4 wheeler/i };</span>
+      } else {
+<span class="cstat-no" title="statement not covered" >        query.vehicleType = { $regex: new RegExp(vehicleType.trim().replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&amp;'), 'i') };</span>
+      }
+    }
 <span class="cstat-no" title="statement not covered" >    if (verificationStatus) <span class="cstat-no" title="statement not covered" >query.verificationStatus = verificationStatus;</span></span>
     
     const pageNum = <span class="cstat-no" title="statement not covered" >parseInt(page, 10) || 1;</span>
@@ -2632,7 +2665,7 @@ async function <span class="fstat-no" title="function not covered" >findNearbyCu
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-06-22T09:58:51.934Z
+                at 2026-09-16T06:47:23.567Z
             </div>
         <script src="../prettify.js"></script>
         <script>

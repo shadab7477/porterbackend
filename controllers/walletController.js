@@ -197,6 +197,9 @@ export const getWalletBalance = async (req, res) => {
             success: true,
             data: {
                 balance: wallet.balance,
+                todayCollection: wallet.todayCollection || 0,
+                weeklyCollection: wallet.weeklyCollection || 0,
+                totalCollection: wallet.totalCollection || 0,
                 transactions,
                 todayEarnings,
                 weeklyEarnings,
