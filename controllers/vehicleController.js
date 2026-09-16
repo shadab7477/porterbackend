@@ -1,20 +1,36 @@
 import Vehicle from '../models/Vehicle.js';
+import Ride from '../models/Ride.js';
 import { uploadToCloudinary, deleteFromCloudinary } from '../config/cloudinary.js';
 
 export const getAllVehicles = async (req, res) => {
   try {
-    const { isActive, page = 1, limit = 10 } = req.query;
+    const { isActive, page = 1, limit = 10, distance } = req.query;
     const query = {};
     
     if (isActive !== undefined) query.isActive = isActive === 'true';
     
-    const vehicles = await Vehicle.find(query)
+    let vehicles = await Vehicle.find(query)
       .skip((page - 1) * limit)
       .limit(parseInt(limit))
-      .sort({ name: 1 });
+      .sort({ name: 1 })
+      .lean(); // Use lean to allow modification
     
     const total = await Vehicle.countDocuments(query);
     
+    if (distance) {
+      const distanceInKm = parseFloat(distance);
+      if (!isNaN(distanceInKm)) {
+        vehicles = await Promise.all(vehicles.map(async (v) => {
+          const fare = await Ride.calculateFare(distanceInKm, v.vehicleType, false);
+          return {
+            ...v,
+            estimatedPrice: fare.total,
+            fareDetails: fare.breakdown
+          };
+        }));
+      }
+    }
+
     res.json({
       success: true,
       data: vehicles,
@@ -159,7 +175,18 @@ export const calculateFare = async (req, res) => {
   try {
     const { vehicleType, distance } = req.body;
     
-    const vehicle = await Vehicle.findOne({ vehicleType, isActive: true });
+    // We'll allow vehicleType to be optional. If provided, we return its specific calculation as primary.
+    // Otherwise we just default to the first active vehicle.
+    let targetVehicleType = vehicleType;
+    if (!targetVehicleType) {
+      const firstVehicle = await Vehicle.findOne({ isActive: true });
+      if (!firstVehicle) {
+        return res.status(404).json({ success: false, message: 'No active vehicles found' });
+      }
+      targetVehicleType = firstVehicle.vehicleType;
+    }
+
+    const vehicle = await Vehicle.findOne({ vehicleType: targetVehicleType, isActive: true });
     if (!vehicle) {
       return res.status(404).json({ success: false, message: 'Vehicle not found' });
     }
@@ -205,6 +232,66 @@ export const calculateFare = async (req, res) => {
       total -= discountAmount;
     }
     
+    // Now fetch all active vehicles to calculate their specific fares
+    const activeVehicles = await Vehicle.find({ isActive: true }).sort({ baseFare: 1 });
+    const vehicleOptions = activeVehicles.map(v => {
+      let vTotal = 0;
+      let vBaseFare = v.baseFare;
+      let vRatePerKm = v.pricePerKm;
+      
+      const vt = v.vehicleType.toLowerCase();
+      if (['bike', 'scooty', 'scooter'].includes(vt)) {
+        vBaseFare = 0;
+        let cDist = distanceInKm < 1 ? 1 : distanceInKm;
+        let vBucket = Math.floor(cDist);
+        if (vBucket > 13) vBucket = 13;
+        
+        let vSlabRate = 0;
+        if (v.slabRates && v.slabRates[`price${vBucket}km`]) {
+           vSlabRate = v.slabRates[`price${vBucket}km`];
+        }
+        if (vSlabRate > 0) {
+           vRatePerKm = vSlabRate;
+        }
+        vTotal = distanceInKm * vRatePerKm;
+      } else {
+        vTotal = vBaseFare + (distanceInKm * vRatePerKm);
+      }
+      
+      let vSubtotal = vTotal;
+      let vDiscountPercentage = 0;
+      let vDiscountAmount = 0;
+      
+      if (distanceInKm > 10) {
+        if (['bike', 'scooty', 'scooter'].includes(vt)) {
+          vDiscountPercentage = 12;
+        } else {
+          vDiscountPercentage = 15;
+        }
+        vDiscountAmount = vTotal * (vDiscountPercentage / 100);
+        vTotal -= vDiscountAmount;
+      }
+
+      return {
+        vehicleType: v.vehicleType,
+        category: v.category,
+        name: v.name,
+        capacity: v.capacity,
+        weight: v.weight,
+        mainPricePerKm: v.mainPricePerKm,
+        breakdown: {
+          distance: distanceInKm,
+          baseFare: vBaseFare,
+          pricePerKm: vRatePerKm,
+          subtotal: Math.round(vSubtotal * 100) / 100,
+          discountAmount: Math.round(vDiscountAmount * 100) / 100,
+          discountPercentage: vDiscountPercentage,
+          distanceCharge: Math.round(vTotal * 100) / 100
+        },
+        total: Math.round(vTotal * 100) / 100
+      };
+    });
+
     res.json({
       success: true,
       data: {
@@ -220,7 +307,8 @@ export const calculateFare = async (req, res) => {
           discountPercentage,
           distanceCharge: Math.round(total * 100) / 100
         },
-        total: Math.round(total * 100) / 100
+        total: Math.round(total * 100) / 100,
+        vehicleOptions // NEW: Array containing calculated fares for all vehicles
       }
     });
   } catch (error) {
@@ -230,7 +318,23 @@ export const calculateFare = async (req, res) => {
 
 export const getActiveVehicles = async (req, res) => {
   try {
-    const vehicles = await Vehicle.find({ isActive: true }).sort({ name: 1 });
+    const { distance } = req.query;
+    let vehicles = await Vehicle.find({ isActive: true }).sort({ name: 1 }).lean();
+    
+    if (distance) {
+      const distanceInKm = parseFloat(distance);
+      if (!isNaN(distanceInKm)) {
+        vehicles = await Promise.all(vehicles.map(async (v) => {
+          const fare = await Ride.calculateFare(distanceInKm, v.vehicleType, false);
+          return {
+            ...v,
+            estimatedPrice: fare.total,
+            fareDetails: fare.breakdown
+          };
+        }));
+      }
+    }
+
     res.json({ success: true, data: vehicles });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

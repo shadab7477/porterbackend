@@ -7,6 +7,7 @@ import CustomerWalletTransaction from '../models/CustomerWalletTransaction.js';
 import DriverWalletTransaction from '../models/DriverWalletTransaction.js';
 import CustomerWallet from '../models/CustomerWallet.js';
 import DriverWallet from '../models/DriverWallet.js';
+import Vehicle from '../models/Vehicle.js';
 import axios from 'axios';
 import jwt from 'jsonwebtoken';
 import { logRideFlow } from '../utils/rideLogger.js';
@@ -2999,6 +3000,31 @@ export const calculateFareEstimate = async (req, res) => {
     // Calculate fare based on total cumulative distance
     const fare = await Ride.calculateFare(totalDistance, vehicleType, isMerchant);
 
+    // Fetch all active vehicles to calculate their specific fares
+    const activeVehicles = await Vehicle.find({ isActive: true }).sort({ baseFare: 1 });
+    const vehicleOptions = await Promise.all(activeVehicles.map(async (v) => {
+      const vFare = await Ride.calculateFare(totalDistance, v.vehicleType, isMerchant);
+      
+      // Calculate eta for this specific vehicle type
+      const speed = v.vehicleType.toLowerCase().includes('bike') || v.vehicleType.toLowerCase().includes('scooter') || v.vehicleType.toLowerCase().includes('scooty') ? 35 : 25; // km/h
+      const durationMins = Math.ceil((totalDistance / speed) * 60);
+
+      return {
+        vehicleType: v.vehicleType,
+        category: v.category,
+        name: v.name,
+        capacity: v.capacity,
+        weight: v.weight,
+        fare: {
+          distanceFare: vFare.distanceFare,
+          total: vFare.total,
+          breakdown: vFare.breakdown
+        },
+        duration: durationMins,
+        durationText: `${durationMins} mins`
+      };
+    }));
+
     const nearbyDriversResult = await Driver.aggregate([
       {
         $geoNear: {
@@ -3045,6 +3071,7 @@ export const calculateFareEstimate = async (req, res) => {
           }
         },
         vehicleType,
+        vehicleOptions, // NEW: All vehicle pricing
         nearbyDrivers: nearbyDriversCount,
         estimatedArrival: totalDuration + 5
       }
