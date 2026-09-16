@@ -11,14 +11,14 @@ import {
   uploadVehicleImage,
   deleteVehicleImage
 } from '../controllers/vehicleController.js';
-import { authMiddleware } from '../middleware/authMiddleware.js';
+import { authMiddleware, optionalAuthMiddleware } from '../middleware/authMiddleware.js';
 import { upload, handleMulterError } from '../middleware/uploadMiddleware.js';
 
 const router = express.Router();
 
-// Public routes (no auth)
-router.get('/', getAllVehicles);
-router.get('/active', getActiveVehicles);
+// Public routes (auth optional for merchant check)
+router.get('/', optionalAuthMiddleware, getAllVehicles);
+router.get('/active', optionalAuthMiddleware, getActiveVehicles);
 router.get('/type/:type', getVehicleByType);
 router.get('/:id', getVehicleById);
 router.post('/calculate-fare', calculateFare);

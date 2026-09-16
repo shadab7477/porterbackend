@@ -1,5 +1,6 @@
 import Vehicle from '../models/Vehicle.js';
 import Ride from '../models/Ride.js';
+import Customer from '../models/Customer.js';
 import { uploadToCloudinary, deleteFromCloudinary } from '../config/cloudinary.js';
 
 export const getAllVehicles = async (req, res) => {
@@ -8,6 +9,14 @@ export const getAllVehicles = async (req, res) => {
     const query = {};
     
     if (isActive !== undefined) query.isActive = isActive === 'true';
+    
+    let isMerchant = false;
+    if (req.customerId) {
+      const customer = await Customer.findById(req.customerId).lean();
+      if (customer && customer.isMerchant) {
+        isMerchant = true;
+      }
+    }
     
     let vehicles = await Vehicle.find(query)
       .skip((page - 1) * limit)
@@ -21,7 +30,7 @@ export const getAllVehicles = async (req, res) => {
       const distanceInKm = parseFloat(distance);
       if (!isNaN(distanceInKm)) {
         vehicles = await Promise.all(vehicles.map(async (v) => {
-          const fare = await Ride.calculateFare(distanceInKm, v.vehicleType, false);
+          const fare = await Ride.calculateFare(distanceInKm, v.vehicleType, isMerchant);
           return {
             ...v,
             estimatedPrice: fare.total,
@@ -346,13 +355,22 @@ export const calculateFare = async (req, res) => {
 export const getActiveVehicles = async (req, res) => {
   try {
     const { distance } = req.query;
+    
+    let isMerchant = false;
+    if (req.customerId) {
+      const customer = await Customer.findById(req.customerId).lean();
+      if (customer && customer.isMerchant) {
+        isMerchant = true;
+      }
+    }
+    
     let vehicles = await Vehicle.find({ isActive: true }).sort({ name: 1 }).lean();
     
     if (distance) {
       const distanceInKm = parseFloat(distance);
       if (!isNaN(distanceInKm)) {
         vehicles = await Promise.all(vehicles.map(async (v) => {
-          const fare = await Ride.calculateFare(distanceInKm, v.vehicleType, false);
+          const fare = await Ride.calculateFare(distanceInKm, v.vehicleType, isMerchant);
           return {
             ...v,
             estimatedPrice: fare.total,
