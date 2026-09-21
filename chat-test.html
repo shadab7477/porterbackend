@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket.IO Chat Test</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
+        .container { display: flex; gap: 20px; }
+        .box { border: 1px solid #ccc; padding: 15px; flex: 1; border-radius: 8px; }
+        .log { height: 300px; overflow-y: scroll; border: 1px solid #eee; padding: 10px; background: #f9f9f9; margin-top: 10px; }
+        input, select, button { margin-bottom: 10px; width: 100%; padding: 8px; box-sizing: border-box; }
+        .msg { margin-bottom: 5px; padding: 5px; border-bottom: 1px solid #ddd; }
+        .msg-time { font-size: 0.8em; color: #888; }
+    </style>
+</head>
+<body>
+    <h1>Socket.IO Chat Test</h1>
+    <p>Use this page to test receiving Socket.IO chat messages. Open two tabs if you want to simulate both sides.</p>
+    
+    <div class="container">
+        <!-- Client Setup -->
+        <div class="box">
+            <h3>1. Socket Setup</h3>
+            <label>Server URL:</label>
+            <input type="text" id="serverUrl" value="http://localhost:5001">
+            
+            <label>I am a:</label>
+            <select id="userType">
+                <option value="customer">Customer</option>
+                <option value="driver">Driver</option>
+            </select>
+            
+            <label>My ID (Sender/Receiver ID):</label>
+            <input type="text" id="myId" value="6a268b059402f93276f05e30">
+            
+            <button id="connectBtn" onclick="connectSocket()">Connect & Join Room</button>
+            <p id="connStatus" style="color: red; font-weight: bold;">Disconnected</p>
+        </div>
+
+        <!-- API Testing -->
+        <div class="box">
+            <h3>2. Send Message via API</h3>
+            <label>JWT Token (Required for API):</label>
+            <input type="text" id="jwtToken" placeholder="Bearer eyJhbG...">
+            
+            <label>Ride ID:</label>
+            <input type="text" id="rideId" placeholder="Ride ID (e.g. RIDE-123)">
+            
+            <label>Message:</label>
+            <input type="text" id="messageText" placeholder="Type a message...">
+            
+            <button onclick="sendMessageAPI()">Send via API</button>
+        </div>
+    </div>
+
+    <h3>Incoming Socket Messages</h3>
+    <div id="messagesLog" class="log"></div>
+
+    <script>
+        let socket;
+
+        function logMessage(text, isError = false) {
+            const log = document.getElementById('messagesLog');
+            const div = document.createElement('div');
+            div.className = 'msg';
+            div.style.color = isError ? 'red' : 'black';
+            
+            const time = new Date().toLocaleTimeString();
+            div.innerHTML = `<span class="msg-time">[${time}]</span> ${text}`;
+            
+            log.appendChild(div);
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function connectSocket() {
+            const url = document.getElementById('serverUrl').value;
+            const type = document.getElementById('userType').value;
+            const myId = document.getElementById('myId').value;
+
+            if (socket) {
+                socket.disconnect();
+            }
+
+            logMessage(`Connecting to ${url}...`);
+            socket = io(url, { transports: ['websocket', 'polling'] });
+
+            socket.on('connect', () => {
+                document.getElementById('connStatus').innerText = 'Connected';
+                document.getElementById('connStatus').style.color = 'green';
+                logMessage(`Socket connected (ID: ${socket.id})`);
+                
+                // Join the room
+                const joinEvent = type === 'customer' ? 'join:customer' : 'join:driver';
+                socket.emit(joinEvent, myId);
+                logMessage(`Emitted ${joinEvent} with ID: ${myId}`);
+                logMessage(`You should now be in room: ${type}:${myId}`);
+            });
+
+            socket.on('disconnect', () => {
+                document.getElementById('connStatus').innerText = 'Disconnected';
+                document.getElementById('connStatus').style.color = 'red';
+                logMessage('Socket disconnected', true);
+            });
+
+            socket.on('connect_error', (err) => {
+                logMessage(`Connection error: ${err.message}`, true);
+            });
+
+            // Listen for chat messages
+            socket.on('chat:new_message', (data) => {
+                console.log('Received chat message:', data);
+                logMessage(`<strong>New Message from ${data.senderName} (${data.senderType}):</strong> ${data.message}`);
+            });
+        }
+
+        async function sendMessageAPI() {
+            const token = document.getElementById('jwtToken').value;
+            const url = document.getElementById('serverUrl').value;
+            const rideId = document.getElementById('rideId').value;
+            const text = document.getElementById('messageText').value;
+
+            if (!token) {
+                alert('Please enter a JWT token to test the API.');
+                return;
+            }
+
+            try {
+                logMessage(`Sending API request to /api/chat/message...`);
+                const res = await fetch(`${url}/api/chat/message`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': token.startsWith('Bearer ') ? token : `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        rideId: rideId,
+                        message: text
+                    })
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    logMessage(`API Success: Message saved successfully.`);
+                } else {
+                    logMessage(`API Error: ${data.message}`, true);
+                }
+            } catch (error) {
+                logMessage(`Fetch Error: ${error.message}`, true);
+            }
+        }
+    </script>
+</body>
+</html>

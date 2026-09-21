@@ -1,0 +1,265 @@
+// server.js
+import express from 'express';
+import http from 'http';
+import { Server } from 'socket.io';
+// cors package no longer used — CORS handled by manual middleware below
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+import connectDB from './config/database.js';
+import initializeSockets from './sockets/socketHandler.js';
+import { initializeSupportSockets } from './sockets/supportSocketHandler.js';
+import { initializeRideTrackingSockets } from './sockets/rideTrackingSocket.js';
+import { initializePackerSockets } from './sockets/packerSocketHandler.js';
+import { initializeCronJobs } from './services/cronService.js';
+
+// Routes
+import driverRoutes from './routes/driverRoutes.js';
+import orderRoutes from './routes/orderRoutes.js';
+import vehicleRoutes from './routes/vehicleRoutes.js';
+import customerRoutes from './routes/customerRoutes.js';
+import authRoutes from './routes/authRoutes.js';
+import driverAuthRoutes from './routes/driverAuthRoutes.js';
+import rideRoutes from './routes/rideRoutes.js';
+import supportRoutes from './routes/supportRoutes.js';
+import verificationRoutes from './routes/verificationRoutes.js';
+import paymentRoutes from './routes/paymentRoutes.js';
+import notificationRoutes from './routes/notificationRoutes.js';
+import walletRoutes from './routes/walletRoutes.js';
+import chatRoutes from './routes/chatRoutes.js';
+import shiftingRoutes from './routes/shiftingRoutes.js';
+import faqRoutes from './routes/faqRoutes.js';
+import adminNotificationRoutes from './routes/adminNotificationRoutes.js';
+import adminRestrictedItemsRoutes from './routes/adminRestrictedItemsRoutes.js';
+import adminGoodsItemsRoutes from './routes/adminGoodsItemsRoutes.js';
+import adminPricingRoutes from './routes/adminPricingRoutes.js';
+import adminDashboardRoutes from './routes/adminDashboardRoutes.js';
+import packerBookingRoutes from './routes/packerBookingRoutes.js';
+import merchantRoutes from './routes/merchantRoutes.js';
+import customerWithdrawalRoutes from './routes/customerWithdrawalRoutes.js';
+dotenv.config();
+
+// ES module fix
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+const server = http.createServer(app);
+
+// ================== 🛡️ CRASH PROTECTION & UNHANDLED ERROR HANDLERS ==================
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 [CRITICAL] Unhandled Promise Rejection at:', promise, 'Reason:', reason?.stack || reason);
+  // Keep process alive despite unhandled promise rejections
+});
+
+process.on('uncaughtException', (err, origin) => {
+  console.error(`💥 [CRITICAL] Uncaught Exception at ${origin}:`, err?.stack || err);
+  // Keep process alive despite uncaught runtime errors
+});
+
+
+// ================== ✅ CORS CONFIG ==================
+
+const allowedOrigins = [
+  "https://godelivo.com",
+  "https://www.godelivo.com",
+  "http://godelivo.com",
+  "http://localhost:3000"
+];
+
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true;
+  if (origin.startsWith("http://localhost") || origin.startsWith("http://127.0.0.1")) return true;
+  return allowedOrigins.includes(origin);
+};
+
+// Single CORS middleware — handles headers AND preflight in one place.
+// Do NOT also add CORS headers in NGINX, or the browser will see duplicates.
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  // No origin = mobile app / server call / same-origin — CORS headers not needed
+  if (origin && isAllowedOrigin(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With');
+  }
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
+
+// ================== 🔥 SOCKET.IO ==================
+
+const io = new Server(server, {
+  cors: {
+    origin: (origin, callback) => {
+      if (isAllowedOrigin(origin)) return callback(null, true);
+      callback(new Error("Socket CORS not allowed: " + origin));
+    },
+    methods: ["GET", "POST", "PATCH", "PUT", "DELETE"],
+    credentials: true,
+    // Prevent Socket.IO from also emitting a header that NGINX then duplicates
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  },
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  transports: ['websocket', 'polling'],
+  allowEIO3: true,
+});
+
+
+// ================== 🌍 GLOBAL MAPS ==================
+
+global.activeDrivers = new Map();
+global.activeCustomers = new Map();
+global.activeRides = new Map();
+
+
+// ================== 🗄️ DATABASE ==================
+
+connectDB();
+
+
+// ================== ⚡ SOCKET HANDLERS ==================
+
+initializeRideTrackingSockets(io);
+initializeSockets(io);
+initializeSupportSockets(io);
+initializePackerSockets(io);
+
+// Initialize scheduled background jobs
+initializeCronJobs();
+
+app.set('io', io);
+
+
+// ================== 🧱 MIDDLEWARE & LOGGING ==================
+
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Comprehensive HTTP Logger Middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  const { method, originalUrl, body, query, ip } = req;
+
+  // Mask sensitive fields in body before logging
+  const safeBody = { ...body };
+  if (safeBody.password) safeBody.password = '***';
+  if (safeBody.confirmPassword) safeBody.confirmPassword = '***';
+
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    const status = res.statusCode;
+    const logLevel = status >= 400 ? '🔴 [HTTP ERROR]' : '🟢 [HTTP]';
+    console.log(`${logLevel} ${method} ${originalUrl} ${status} - ${duration}ms - IP: ${ip} ${Object.keys(safeBody).length > 0 ? `- Body: ${JSON.stringify(safeBody)}` : ''}`);
+  });
+
+  next();
+});
+
+// Trust proxy (NGINX)
+app.set('trust proxy', 1);
+
+
+// ================== 📡 ROUTES ==================
+
+app.use('/api/auth', authRoutes);
+app.use('/api/drivers', driverRoutes);
+app.use('/api/orders', orderRoutes);
+app.use('/api/vehicles', vehicleRoutes);
+app.use('/api/customers', customerRoutes);
+app.use('/api/driver', driverAuthRoutes);
+app.use('/api/rides', rideRoutes);
+app.use('/api/support', supportRoutes);
+app.use('/api/verification', verificationRoutes);
+app.use('/api/payments', paymentRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/wallet', walletRoutes);
+app.use('/api/chat', chatRoutes);
+app.use('/api/shifting', shiftingRoutes);
+app.use('/api/faq', faqRoutes);
+app.use('/api/admin/notifications', adminNotificationRoutes);
+app.use('/api/admin/restricted-items', adminRestrictedItemsRoutes);
+app.use('/api/admin/goods-items', adminGoodsItemsRoutes);
+app.use('/api/admin/pricing', adminPricingRoutes);
+app.use('/api/admin/dashboard', adminDashboardRoutes);
+app.use('/api/packers-movers', packerBookingRoutes);
+app.use('/api/merchant', merchantRoutes);
+app.use('/api/vehicles', vehicleRoutes);
+app.use('/api/withdrawals', customerWithdrawalRoutes);
+
+// ================== ❤️ HEALTH CHECK ==================
+
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    time: new Date().toISOString(),
+    connections: io.engine?.clientsCount || 0,
+    drivers: global.activeDrivers.size,
+    customers: global.activeCustomers.size,
+    rides: global.activeRides.size
+  });
+});
+
+
+// ================== 🔌 SOCKET TEST ==================
+
+app.get('/socket-test', (req, res) => {
+  res.json({
+    status: 'Socket.IO ready',
+    connections: io.engine?.clientsCount || 0
+  });
+});
+
+
+// ================== 📦 REACT BUILD ==================
+
+app.use(express.static(path.join(__dirname, 'build')));
+
+app.get(/^\/(?!api|health|socket-test).*/, (req, res) => {
+  res.sendFile(path.join(__dirname, 'build', 'index.html'));
+});
+
+
+// ================== ❌ ERROR HANDLER ==================
+
+app.use((err, req, res, next) => {
+  console.error(`💥 [CRITICAL ERROR] ${req.method} ${req.originalUrl}:`, err.stack || err.message || err);
+  if (!res.headersSent) {
+    res.status(err.status || 500).json({
+      success: false,
+      message: err.message || 'Internal Server Error',
+      error: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+  }
+});
+
+
+// ================== 🚀 SERVER START & SHUTDOWN ==================
+
+const PORT = process.env.PORT || 5001;
+
+server.listen(PORT, '127.0.0.1', () => {
+  console.log(`🚀 Server running on http://127.0.0.1:${PORT}`);
+});
+
+const gracefulShutdown = (signal) => {
+  console.log(`⚠️ Received ${signal}. Closing server gracefully...`);
+  server.close(() => {
+    console.log('HTTP & Socket.IO server closed.');
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    console.error('Forced shutdown timeout reached.');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

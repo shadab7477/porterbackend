@@ -1,0 +1,989 @@
+import DriverApplication from '../models/DriverApplication.js';
+import Driver from '../models/Driver.js';
+
+const ensureDriverCreated = async (application) => {
+  let driver = await Driver.findOne({ phone: application.phone });
+  if (!driver) {
+    const vType = application.vehicleType?.toLowerCase() || '';
+    const isTwoWheeler = vType === 'bike' || vType === 'scooter';
+    const hasHired = application.hiredDriver?.hasHiredDriver;
+
+    driver = new Driver({
+      driverId: application.driverId,
+      name: hasHired ? application.hiredDriver.name : application.fullName,
+      phone: application.phone,
+      email: application.email,
+      applicationId: application._id,
+      vehicleType: application.vehicleType,
+      vehicleNumber: application.vehicleNumber,
+      isOnline: false,
+      lastActive: new Date(),
+      subscription: {
+        status: isTwoWheeler ? 'pending' : 'active',
+        amount: isTwoWheeler ? 499 : 0,
+        validUntil: null
+      }
+    });
+    await driver.save();
+  }
+  return driver;
+};
+
+// Document types that can be verified
+const documentTypes = [
+  'profilePhoto',
+  'aadharFront',
+  'aadharBack',
+  'panCard',
+  'drivingLicense',
+  'vehicleRC',
+  'vehicleInsurance',
+  'vehiclePhoto',
+  'bankDetails',
+  'hiredDriverLicense'
+];
+
+const verifiableDocumentTypes = [...documentTypes, 'aadharCard'];
+
+const hasValidUrl = (doc) => {
+  if (!doc) return null;
+  if (typeof doc === 'string' && doc.trim().length > 0) return { url: doc, verification: { status: 'pending' } };
+  if (typeof doc === 'object') {
+    const url = doc.url || doc.path || doc.secure_url;
+    if (url) return { ...doc, url };
+  }
+  return null;
+};
+
+const getDocumentForType = (application, documentType) => {
+  if (documentType === 'bankDetails') {
+    return application.bankDetails?.accountNumber ? application.bankDetails : null;
+  }
+
+  if (documentType === 'hiredDriverLicense') {
+    return hasValidUrl(application.hiredDriver?.licenseImage) || hasValidUrl(application.hiredDriverLicense);
+  }
+
+  if (documentType === 'aadharFront') {
+    return hasValidUrl(application.aadharCard?.front) || hasValidUrl(application.aadharFront);
+  }
+
+  if (documentType === 'aadharBack') {
+    return hasValidUrl(application.aadharCard?.back) || hasValidUrl(application.aadharBack);
+  }
+
+  if (documentType === 'aadharCard') {
+    return hasValidUrl(application.aadharCard?.front) || hasValidUrl(application.aadharCard?.back) || hasValidUrl(application.aadharCard);
+  }
+
+  return hasValidUrl(application[documentType]) || hasValidUrl(application.documents?.[documentType]);
+};
+
+const setDocumentVerification = (application, documentType, verificationData) => {
+  if (documentType === 'bankDetails') {
+    application.bankDetails.verification = verificationData;
+    return;
+  }
+
+  if (documentType === 'hiredDriverLicense') {
+    if (application.hiredDriver && application.hiredDriver.licenseImage) {
+      application.hiredDriver.licenseImage.verification = verificationData;
+    }
+    return;
+  }
+
+  if (documentType === 'aadharFront') {
+    application.aadharCard.front.verification = verificationData;
+    application.aadharCard.verification = application.aadharCard.verification || {};
+    return;
+  }
+
+  if (documentType === 'aadharBack') {
+    application.aadharCard.back.verification = verificationData;
+    application.aadharCard.verification = application.aadharCard.verification || {};
+    return;
+  }
+
+  if (documentType === 'aadharCard') {
+    if (application.aadharCard?.front) {
+      application.aadharCard.front.verification = verificationData;
+    }
+    if (application.aadharCard?.back) {
+      application.aadharCard.back.verification = verificationData;
+    }
+    application.aadharCard.verification = verificationData;
+    return;
+  }
+
+  application[documentType].verification = verificationData;
+};
+
+const syncAadharOverallVerification = (application) => {
+  const frontStatus = application.aadharCard?.front?.verification?.status;
+  const backStatus = application.aadharCard?.back?.verification?.status;
+
+  if (!application.aadharCard || (!frontStatus && !backStatus)) {
+    return;
+  }
+
+  if (frontStatus === 'rejected' || backStatus === 'rejected') {
+    application.aadharCard.verification = { status: 'rejected' };
+    return;
+  }
+
+  if ((!application.aadharCard.front || frontStatus === 'verified') &&
+      (!application.aadharCard.back || backStatus === 'verified')) {
+    application.aadharCard.verification = { status: 'verified' };
+    return;
+  }
+
+  application.aadharCard.verification = { status: 'pending' };
+};
+
+const getDocumentMatchPath = (documentType) => {
+  if (documentType === 'bankDetails') return 'bankDetails.accountNumber';
+  if (documentType === 'aadharFront') return 'aadharCard.front.url';
+  if (documentType === 'aadharBack') return 'aadharCard.back.url';
+  if (documentType === 'hiredDriverLicense') return 'hiredDriver.licenseImage.url';
+  return `${documentType}.url`;
+};
+
+const getDocumentStatusPath = (documentType) => {
+  if (documentType === 'bankDetails') return '$bankDetails.verification.status';
+  if (documentType === 'aadharFront') return '$aadharCard.front.verification.status';
+  if (documentType === 'aadharBack') return '$aadharCard.back.verification.status';
+  if (documentType === 'hiredDriverLicense') return '$hiredDriver.licenseImage.verification.status';
+  return `$${documentType}.verification.status`;
+};
+
+// Get all applications with filtering
+// Get all applications with filtering
+export const getApplications = async (req, res) => {
+  try {
+    const { status, documentStatus, docType, docStatus, paymentStatus, vehicleType, search, page = 1, limit = 10 } = req.query;
+    
+    let query = {};
+    const addAndCondition = (condition) => {
+      query.$and = query.$and || [];
+      query.$and.push(condition);
+    };
+
+    // 1. Status Filter
+    if (status && status !== 'all') {
+      if (status === 'pending') {
+        query.verificationStatus = { $in: ['pending', 'submitted', 'under_review'] };
+      } else if (status === 'submitted') {
+        query.verificationStatus = { $in: ['submitted', 'pending'] };
+      } else if (status === 'under_review') {
+        query.verificationStatus = { $in: ['under_review', 'pending', 'submitted'] };
+      } else {
+        query.verificationStatus = status;
+      }
+    }
+
+    // 2. Payment Status Filter
+    if (paymentStatus === 'completed') {
+      query['subscriptionPayment.status'] = 'completed';
+    } else if (paymentStatus === 'remaining') {
+      addAndCondition({
+        $or: [
+          { 'subscriptionPayment.status': { $exists: false } },
+          { 'subscriptionPayment.status': { $ne: 'completed' } }
+        ]
+      });
+    } else if (paymentStatus && paymentStatus !== 'all') {
+      query['subscriptionPayment.status'] = paymentStatus;
+    }
+
+    // 3. Vehicle Type Filter
+    if (vehicleType && vehicleType !== 'all') {
+      const trimmedVehicle = vehicleType.trim();
+      const vLower = trimmedVehicle.toLowerCase();
+      if (vLower === '2_wheelers' || vLower === '2 wheelers' || vLower === '2wheeler') {
+        addAndCondition({ vehicleType: { $regex: /bike|scoot/i } });
+      } else if (vLower === '3_wheelers' || vLower === '3 wheelers' || vLower === '3wheeler') {
+        addAndCondition({ vehicleType: { $regex: /3_wheeler|auto|loader|mini_3w|3 wheeler/i } });
+      } else if (vLower === '4_wheelers' || vLower === '4 wheelers' || vLower === '4wheeler') {
+        addAndCondition({ vehicleType: { $regex: /tata_ace|4_wheeler|car|truck|pickup|4 wheeler/i } });
+      } else {
+        const vehicleRegex = new RegExp(trimmedVehicle.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'i');
+        addAndCondition({ vehicleType: vehicleRegex });
+      }
+    }
+
+    // 3. Search Filter
+    if (search && search.trim()) {
+      const searchRegex = new RegExp(search.trim().replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'i');
+      addAndCondition({
+        $or: [
+          { fullName: searchRegex },
+          { phone: searchRegex },
+          { email: searchRegex },
+          { vehicleNumber: searchRegex },
+          { driverId: searchRegex },
+          { 'hiredDriver.name': searchRegex },
+          { 'hiredDriver.phone': searchRegex }
+        ]
+      });
+    }
+
+    // 4. Filter by specific document status if provided
+    const targetDocType = docType || (typeof documentStatus === 'object' ? documentStatus.documentType : null);
+    const targetDocStatus = docStatus || (typeof documentStatus === 'object' ? documentStatus.status : null);
+
+    if (targetDocType && targetDocStatus && targetDocStatus !== 'all') {
+      if (targetDocType === 'bankDetails') {
+        query['bankDetails.verification.status'] = targetDocStatus;
+      } else if (targetDocType === 'aadharCard') {
+        if (targetDocStatus === 'verified') {
+          addAndCondition({
+            $or: [
+              { 'aadharCard.front.verification.status': 'verified' },
+              { 'aadharCard.back.verification.status': 'verified' },
+              { 'aadharCard.verification.status': 'verified' }
+            ]
+          });
+        } else if (targetDocStatus === 'rejected') {
+          addAndCondition({
+            $or: [
+              { 'aadharCard.front.verification.status': 'rejected' },
+              { 'aadharCard.back.verification.status': 'rejected' },
+              { 'aadharCard.verification.status': 'rejected' }
+            ]
+          });
+        } else {
+          addAndCondition({
+            $or: [
+              { 'aadharCard.front.verification.status': 'pending' },
+              { 'aadharCard.back.verification.status': 'pending' },
+              { 'aadharCard.verification.status': 'pending' }
+            ]
+          });
+        }
+      } else if (targetDocType === 'hiredDriverLicense') {
+        query['hiredDriver.licenseImage.verification.status'] = targetDocStatus;
+      } else if (documentTypes.includes(targetDocType)) {
+        query[`${targetDocType}.verification.status`] = targetDocStatus;
+      }
+    }
+
+    const applications = await DriverApplication.find(query)
+      .sort({ createdAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit)
+      .select('-__v');
+
+    const total = await DriverApplication.countDocuments(query);
+
+    res.status(200).json({
+      success: true,
+      data: applications,
+      pagination: {
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / limit) || 1,
+      },
+    });
+  } catch (error) {
+    console.error('Get applications error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch applications',
+      error: error.message,
+    });
+  }
+};
+
+// Get single application by ID with document verification details
+export const getApplicationById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const application = await DriverApplication.findById(id);
+
+    if (!application) {
+      return res.status(404).json({
+        success: false,
+        message: 'Application not found',
+      });
+    }
+
+    // Add document verification summary
+    const documentVerificationSummary = {
+      totalDocuments: 0,
+      verified: 0,
+      rejected: 0,
+      pending: 0,
+      documents: {}
+    };
+
+    documentTypes.forEach(type => {
+      if (type === 'bankDetails') {
+        if (application.bankDetails?.accountNumber) {
+          documentVerificationSummary.documents[type] = {
+            exists: true,
+            status: application.bankDetails.verification?.status || 'pending',
+            rejectionReason: application.bankDetails.verification?.rejectionReason
+          };
+          
+          if (application.bankDetails.verification?.status === 'verified') documentVerificationSummary.verified++;
+          else if (application.bankDetails.verification?.status === 'rejected') documentVerificationSummary.rejected++;
+          else documentVerificationSummary.pending++;
+          documentVerificationSummary.totalDocuments++;
+        } else {
+          documentVerificationSummary.documents[type] = { exists: false };
+        }
+      } else {
+        const document = getDocumentForType(application, type);
+        if (document) {
+          documentVerificationSummary.documents[type] = {
+            exists: true,
+            status: document.verification?.status || 'pending',
+            uploadedAt: document.uploadedAt,
+            rejectionReason: document.verification?.rejectionReason
+          };
+          
+          if (document.verification?.status === 'verified') documentVerificationSummary.verified++;
+          else if (document.verification?.status === 'rejected') documentVerificationSummary.rejected++;
+          else documentVerificationSummary.pending++;
+          documentVerificationSummary.totalDocuments++;
+        } else {
+          documentVerificationSummary.documents[type] = { exists: false };
+        }
+      }
+    });
+
+    const responseData = application.toObject();
+    responseData.documentVerificationSummary = documentVerificationSummary;
+
+    res.status(200).json({
+      success: true,
+      data: responseData,
+    });
+  } catch (error) {
+    console.error('Get application error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch application',
+      error: error.message,
+    });
+  }
+};
+
+// Verify a specific document
+export const verifyDocument = async (req, res) => {
+  try {
+    const { id, documentType } = req.params;
+    const { status, rejectionReason, comments } = req.body;
+
+    if (!verifiableDocumentTypes.includes(documentType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid document type',
+        validTypes: verifiableDocumentTypes
+      });
+    }
+
+    if (!['verified', 'rejected'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Status must be either "verified" or "rejected"'
+      });
+    }
+
+    if (status === 'rejected' && !rejectionReason) {
+      return res.status(400).json({
+        success: false,
+        message: 'Rejection reason is required when rejecting a document'
+      });
+    }
+
+    const application = await DriverApplication.findById(id);
+    if (!application) {
+      return res.status(404).json({
+        success: false,
+        message: 'Application not found'
+      });
+    }
+
+    // Check if document exists
+    const document = getDocumentForType(application, documentType);
+    if (!document) {
+      return res.status(400).json({
+        success: false,
+        message: `${documentType} not found in application`
+      });
+    }
+
+    // Update document verification status
+    const verificationData = {
+      status,
+      verifiedAt: new Date(),
+      rejectionReason: status === 'rejected' ? rejectionReason : undefined,
+      comments: comments || ''
+    };
+
+    setDocumentVerification(application, documentType, verificationData);
+    syncAadharOverallVerification(application);
+
+    // Calculate and update overall status
+    application.verificationStatus = application.calculateOverallStatus();
+
+    await application.save();
+
+    if (application.verificationStatus === 'verified') {
+      await ensureDriverCreated(application);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `${documentType} verification status updated successfully`,
+      data: {
+        applicationId: application._id,
+        documentType,
+        verification: verificationData,
+        overallStatus: application.verificationStatus
+      }
+    });
+  } catch (error) {
+    console.error('Error in verifyDocument:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to verify document',
+      error: error.message
+    });
+  }
+};
+
+// Original verifyDriver function (verifies all documents at once)
+export const verifyDriver = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const application = await DriverApplication.findById(id);
+
+    if (!application) {
+      return res.status(404).json({
+        success: false,
+        message: 'Application not found',
+      });
+    }
+
+    // Verify all existing documents
+    const documents = [
+      'profilePhoto',
+      'panCard',
+      'drivingLicense',
+      'vehicleRC',
+      'vehicleInsurance',
+      'vehiclePhoto'
+    ];
+
+    documents.forEach(docType => {
+      if (application[docType]?.url) {
+        application[docType].verification = {
+          status: 'verified',
+          verifiedAt: new Date()
+        };
+      }
+    });
+
+    if (application.aadharCard?.front) {
+      application.aadharCard.front.verification = {
+        status: 'verified',
+        verifiedAt: new Date()
+      };
+    }
+
+    if (application.aadharCard?.back) {
+      application.aadharCard.back.verification = {
+        status: 'verified',
+        verifiedAt: new Date()
+      };
+    }
+
+    if (application.aadharCard?.front || application.aadharCard?.back) {
+      application.aadharCard.verification = {
+        status: 'verified',
+        verifiedAt: new Date()
+      };
+    }
+
+    if (application.bankDetails?.accountNumber) {
+      application.bankDetails.verification = {
+        status: 'verified',
+        verifiedAt: new Date()
+      };
+    }
+
+    if (application.hiredDriver?.licenseImage?.url) {
+      application.hiredDriver.licenseImage.verification = {
+        status: 'verified',
+        verifiedAt: new Date()
+      };
+    }
+
+    application.verificationStatus = 'verified';
+    application.reviewedAt = new Date();
+
+    await application.save();
+    await ensureDriverCreated(application);
+
+    res.status(200).json({
+      success: true,
+      message: 'Driver verified successfully',
+      data: application,
+    });
+  } catch (error) {
+    console.error('Verify driver error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to verify driver',
+      error: error.message,
+    });
+  }
+};
+
+// Original rejectDriver function (rejects entire application)
+export const rejectDriver = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    if (!reason) {
+      return res.status(400).json({
+        success: false,
+        message: 'Rejection reason is required',
+      });
+    }
+
+    const application = await DriverApplication.findById(id);
+
+    if (!application) {
+      return res.status(404).json({
+        success: false,
+        message: 'Application not found',
+      });
+    }
+
+    // Reject all documents
+    const documents = [
+      'profilePhoto',
+      'panCard',
+      'drivingLicense',
+      'vehicleRC',
+      'vehicleInsurance',
+      'vehiclePhoto'
+    ];
+
+    documents.forEach(docType => {
+      if (application[docType]?.url) {
+        application[docType].verification = {
+          status: 'rejected',
+          verifiedAt: new Date(),
+          rejectionReason: reason
+        };
+      }
+    });
+
+    if (application.aadharCard?.front) {
+      application.aadharCard.front.verification = {
+        status: 'rejected',
+        verifiedAt: new Date(),
+        rejectionReason: reason
+      };
+    }
+
+    if (application.aadharCard?.back) {
+      application.aadharCard.back.verification = {
+        status: 'rejected',
+        verifiedAt: new Date(),
+        rejectionReason: reason
+      };
+    }
+
+    if (application.aadharCard?.front || application.aadharCard?.back) {
+      application.aadharCard.verification = {
+        status: 'rejected',
+        verifiedAt: new Date(),
+        rejectionReason: reason
+      };
+    }
+
+    if (application.bankDetails?.accountNumber) {
+      application.bankDetails.verification = {
+        status: 'rejected',
+        verifiedAt: new Date(),
+        rejectionReason: reason
+      };
+    }
+
+    if (application.hiredDriver?.licenseImage?.url) {
+      application.hiredDriver.licenseImage.verification = {
+        status: 'rejected',
+        verifiedAt: new Date(),
+        rejectionReason: reason
+      };
+    }
+
+    application.verificationStatus = 'rejected';
+    application.rejectionReason = reason;
+    application.reviewedAt = new Date();
+
+    await application.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Driver rejected successfully',
+      data: application,
+    });
+  } catch (error) {
+    console.error('Reject driver error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to reject driver',
+      error: error.message,
+    });
+  }
+};
+
+// Update verification status (overall or specific document)
+export const updateStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, documentType } = req.body;
+
+    const validStatuses = ['pending', 'submitted', 'under_review', 'partially_verified', 'verified', 'rejected'];
+    
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status',
+      });
+    }
+
+    const application = await DriverApplication.findById(id);
+
+    if (!application) {
+      return res.status(404).json({
+        success: false,
+        message: 'Application not found',
+      });
+    }
+
+    // If documentType is provided, update specific document status
+    if (documentType) {
+      if (!verifiableDocumentTypes.includes(documentType)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid document type',
+        });
+      }
+
+      const document = getDocumentForType(application, documentType);
+      if (!document) {
+        return res.status(400).json({
+          success: false,
+          message: `${documentType} not found`,
+        });
+      }
+
+      const verificationData = {
+        ...(document.verification?.toObject?.() || document.verification || {}),
+        status,
+        verifiedAt: status === 'verified' || status === 'rejected' ? new Date() : document.verification?.verifiedAt
+      };
+
+      setDocumentVerification(application, documentType, verificationData);
+      syncAadharOverallVerification(application);
+
+      // Recalculate overall status
+      application.verificationStatus = application.calculateOverallStatus();
+    } else {
+      // Update overall status
+      application.verificationStatus = status;
+      
+      if (status === 'under_review') {
+        application.reviewedAt = new Date();
+      }
+    }
+
+    await application.save();
+
+    if (application.verificationStatus === 'verified') {
+      await ensureDriverCreated(application);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: documentType 
+        ? `${documentType} status updated to ${status}`
+        : `Overall status updated to ${status}`,
+      data: application,
+    });
+  } catch (error) {
+    console.error('Update status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update status',
+      error: error.message,
+    });
+  }
+};
+
+// Get document verification summary for an application
+export const getDocumentVerificationSummary = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const application = await DriverApplication.findById(id);
+
+    if (!application) {
+      return res.status(404).json({
+        success: false,
+        message: 'Application not found',
+      });
+    }
+
+    const summary = {
+      applicationId: application._id,
+      phone: application.phone,
+      fullName: application.fullName,
+      overallStatus: application.verificationStatus,
+      documents: {}
+    };
+
+    documentTypes.forEach(type => {
+      if (type === 'bankDetails') {
+        if (application.bankDetails?.accountNumber) {
+          summary.documents[type] = {
+            exists: true,
+            status: application.bankDetails.verification?.status || 'pending',
+            verifiedAt: application.bankDetails.verification?.verifiedAt,
+            rejectionReason: application.bankDetails.verification?.rejectionReason,
+            comments: application.bankDetails.verification?.comments
+          };
+        } else {
+          summary.documents[type] = { exists: false };
+        }
+      } else {
+        const document = getDocumentForType(application, type);
+        if (document) {
+          summary.documents[type] = {
+            exists: true,
+            status: document.verification?.status || 'pending',
+            uploadedAt: document.uploadedAt,
+            verifiedAt: document.verification?.verifiedAt,
+            rejectionReason: document.verification?.rejectionReason,
+            comments: document.verification?.comments
+          };
+          
+          // Add document-specific details
+          if (type === 'drivingLicense' && application.drivingLicense?.licenseNumber) {
+            summary.documents[type].licenseNumber = application.drivingLicense.licenseNumber;
+            summary.documents[type].expiryDate = application.drivingLicense.expiryDate;
+          }
+          if (type === 'vehicleRC' && application.vehicleRC?.rcNumber) {
+            summary.documents[type].rcNumber = application.vehicleRC.rcNumber;
+          }
+          if (type === 'vehicleInsurance' && application.vehicleInsurance?.policyNumber) {
+            summary.documents[type].policyNumber = application.vehicleInsurance.policyNumber;
+            summary.documents[type].expiryDate = application.vehicleInsurance.expiryDate;
+          }
+        } else {
+          summary.documents[type] = { exists: false };
+        }
+      }
+    });
+
+    res.status(200).json({
+      success: true,
+      data: summary
+    });
+  } catch (error) {
+    console.error('Get document verification summary error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get document verification summary',
+      error: error.message
+    });
+  }
+};
+
+// Get verification statistics with document-level breakdown
+export const getStats = async (req, res) => {
+  try {
+    // Overall status stats
+    const overallStats = await DriverApplication.aggregate([
+      {
+        $group: {
+          _id: '$verificationStatus',
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    // Document-specific stats
+    const documentStats = {};
+    
+    for (const docType of documentTypes) {
+      const stats = await DriverApplication.aggregate([
+        {
+          $match: { [getDocumentMatchPath(docType)]: { $exists: true } }
+        },
+        {
+          $group: {
+            _id: getDocumentStatusPath(docType),
+            count: { $sum: 1 }
+          }
+        }
+      ]);
+
+      documentStats[docType] = {
+        pending: 0,
+        verified: 0,
+        rejected: 0,
+        total: 0
+      };
+
+      stats.forEach(stat => {
+        const status = stat._id || 'pending';
+        documentStats[docType][status] = stat.count;
+        documentStats[docType].total += stat.count;
+      });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const todayVerified = await DriverApplication.countDocuments({
+      verificationStatus: 'verified',
+      reviewedAt: { $gte: today },
+    });
+
+    const paymentCompleted = await DriverApplication.countDocuments({
+      'subscriptionPayment.status': 'completed'
+    });
+
+    const paymentRemaining = await DriverApplication.countDocuments({
+      $or: [
+        { 'subscriptionPayment.status': { $exists: false } },
+        { 'subscriptionPayment.status': { $ne: 'completed' } }
+      ]
+    });
+
+    const result = {
+      pending: 0,
+      submitted: 0,
+      under_review: 0,
+      partially_verified: 0,
+      verified: 0,
+      rejected: 0,
+      todayVerified,
+      paymentCompleted,
+      paymentRemaining,
+      total: await DriverApplication.countDocuments(),
+      documentStats
+    };
+
+    overallStats.forEach(stat => {
+      if (stat._id) {
+        result[stat._id] = stat.count;
+      }
+    });
+
+    // If pending is 0, sum up pending, submitted, and under_review counts for the pending tab
+    const pendingCount = await DriverApplication.countDocuments({
+      verificationStatus: { $in: ['pending', 'submitted', 'under_review'] }
+    });
+    result.pending = pendingCount;
+
+    res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error('Get stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get statistics',
+      error: error.message,
+    });
+  }
+};
+
+// Update payment status for a driver application (Admin action)
+export const updatePaymentStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, amount, transactionId, note } = req.body;
+
+    if (!['pending', 'completed', 'failed'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid payment status. Allowed values: pending, completed, failed'
+      });
+    }
+
+    const application = await DriverApplication.findById(id);
+    if (!application) {
+      return res.status(404).json({
+        success: false,
+        message: 'Application not found'
+      });
+    }
+
+    if (!application.subscriptionPayment) {
+      application.subscriptionPayment = {};
+    }
+
+    application.subscriptionPayment.status = status;
+    if (amount !== undefined && amount !== null && !isNaN(Number(amount))) {
+      application.subscriptionPayment.amount = Number(amount);
+    }
+
+    if (status === 'completed') {
+      application.subscriptionPayment.paidAt = new Date();
+      application.subscriptionPayment.razorpayPaymentId = transactionId || application.subscriptionPayment.razorpayPaymentId || 'ADMIN_MARKED';
+    } else if (status === 'pending') {
+      application.subscriptionPayment.paidAt = null;
+    }
+
+    await application.save();
+
+    // If driver record exists for this application or phone, sync driver.subscription
+    try {
+      const Driver = (await import('../models/Driver.js')).default;
+      const driver = await Driver.findOne({
+        $or: [
+          { applicationId: application._id },
+          { phone: application.phone }
+        ]
+      });
+
+      if (driver) {
+        if (!driver.subscription) {
+          driver.subscription = {};
+        }
+        driver.subscription.status = status === 'completed' ? 'active' : 'pending';
+        driver.subscription.amount = application.subscriptionPayment.amount || driver.subscription.amount || 0;
+        await driver.save();
+      }
+    } catch (driverErr) {
+      console.warn('Could not sync Driver subscription status:', driverErr.message);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Payment status updated to ${status}`,
+      data: application
+    });
+  } catch (error) {
+    console.error('Update payment status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update payment status',
+      error: error.message
+    });
+  }
+};
