@@ -488,7 +488,11 @@ export const updateDriverAvailability = async (req, res) => {
 // Get available drivers (public)
 export const getAvailableDrivers = async (req, res) => {
   try {
+<<<<<<< HEAD
     const { vehicleType, latitude, longitude, radius = 15000 } = req.query;
+=======
+    const { vehicleType, latitude, longitude, radius = 5000 } = req.query;
+>>>>>>> e6a22a521443e263773a48df57882aec112a43da
     
     const query = {
       isActive: true,
@@ -863,4 +867,7 @@ async function findNearbyCustomers(latitude, longitude, radius) {
     return [];
   }
 }
+<<<<<<< HEAD
 
+=======
+>>>>>>> e6a22a521443e263773a48df57882aec112a43da
