@@ -7,16 +7,16 @@ export const toggleMyOnlineStatus = async (req, res) => {
   try {
     const driverId = req.driver.id;
     const { latitude, longitude } = req.body; // Get location from request body
-    
+
     const driver = await Driver.findById(driverId);
-    
+
     if (!driver) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Driver not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
       });
     }
-    
+
     // Check if driver is verified
     if (!req.driver.isVerified) {
       return res.status(403).json({
@@ -24,10 +24,10 @@ export const toggleMyOnlineStatus = async (req, res) => {
         message: 'Driver not verified. Please complete registration and wait for verification.'
       });
     }
-    
+
     // If going online, validate location is provided
     const newOnlineStatus = !driver.isOnline;
-    
+
     if (newOnlineStatus) {
       // When going online, location is required
       if (!latitude || !longitude) {
@@ -36,22 +36,22 @@ export const toggleMyOnlineStatus = async (req, res) => {
           message: 'Location (latitude and longitude) is required to go online'
         });
       }
-      
+
       // Validate coordinates
       if (typeof latitude !== 'number' || typeof longitude !== 'number' ||
-          latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+        latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
         return res.status(400).json({
           success: false,
           message: 'Invalid coordinates. Latitude must be between -90 and 90, longitude between -180 and 180'
         });
       }
-      
+
       // Update current location when going online
       driver.currentLocation = {
         type: 'Point',
         coordinates: [longitude, latitude] // GeoJSON format: [longitude, latitude]
       };
-      
+
       driver.isOnline = true;
       driver.isAvailable = true;
       driver.lastOnlineAt = new Date();
@@ -63,10 +63,10 @@ export const toggleMyOnlineStatus = async (req, res) => {
       // Optionally keep last known location or clear it
       // driver.currentLocation.coordinates = [0, 0];
     }
-    
+
     driver.lastActive = new Date();
     await driver.save();
-    
+
     // Emit socket event if needed
     const io = req.app.get('io');
     if (io) {
@@ -78,7 +78,7 @@ export const toggleMyOnlineStatus = async (req, res) => {
         timestamp: new Date()
       });
     }
-    
+
     res.status(200).json({
       success: true,
       message: `You are now ${driver.isOnline ? 'online' : 'offline'}`,
@@ -93,9 +93,9 @@ export const toggleMyOnlineStatus = async (req, res) => {
     });
   } catch (error) {
     console.error('Error in toggleMyOnlineStatus:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message || 'Failed to toggle online status' 
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to toggle online status'
     });
   }
 }
@@ -104,17 +104,17 @@ export const toggleMyOnlineStatus = async (req, res) => {
 export const getMyOnlineStatus = async (req, res) => {
   try {
     const driverId = req.driver.id;
-    
+
     const driver = await Driver.findById(driverId)
       .select('isOnline isAvailable lastActive lastOnlineAt applicationId');
-    
+
     if (!driver) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Driver not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
       });
     }
-    
+
     res.status(200).json({
       success: true,
       data: {
@@ -127,9 +127,9 @@ export const getMyOnlineStatus = async (req, res) => {
     });
   } catch (error) {
     console.error('Error in getMyOnlineStatus:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message || 'Failed to get online status' 
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to get online status'
     });
   }
 };
@@ -139,14 +139,14 @@ export const updateLocation = async (req, res) => {
   try {
     const driverId = req.driver.id;
     const { latitude, longitude } = req.body;
-    
+
     if (!latitude || !longitude) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Latitude and longitude are required' 
+      return res.status(400).json({
+        success: false,
+        message: 'Latitude and longitude are required'
       });
     }
-    
+
     const driver = await Driver.findByIdAndUpdate(
       driverId,
       {
@@ -158,14 +158,14 @@ export const updateLocation = async (req, res) => {
       },
       { new: true }
     ).select('currentLocation lastActive applicationId');
-    
+
     if (!driver) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Driver not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
       });
     }
-    
+
     // Emit socket event if needed
     const io = req.app.get('io');
     if (io) {
@@ -175,7 +175,7 @@ export const updateLocation = async (req, res) => {
         timestamp: new Date()
       });
     }
-    
+
     res.status(200).json({
       success: true,
       message: 'Location updated successfully',
@@ -187,9 +187,9 @@ export const updateLocation = async (req, res) => {
     });
   } catch (error) {
     console.error('Error in updateLocation:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message || 'Failed to update location' 
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to update location'
     });
   }
 };
@@ -198,17 +198,17 @@ export const updateLocation = async (req, res) => {
 export const getDriverStats = async (req, res) => {
   try {
     const driverId = req.driver.id;
-    
+
     const driver = await Driver.findById(driverId)
       .select('totalEarnings totalTrips rating isOnline isAvailable applicationId');
-    
+
     if (!driver) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Driver not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
       });
     }
-    
+
     res.status(200).json({
       success: true,
       data: {
@@ -222,9 +222,9 @@ export const getDriverStats = async (req, res) => {
     });
   } catch (error) {
     console.error('Error in getDriverStats:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message || 'Failed to get driver stats' 
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to get driver stats'
     });
   }
 };
@@ -237,7 +237,7 @@ export const getAllDrivers = async (req, res) => {
   try {
     const { status, vehicleType, verificationStatus, page = 1, limit = 10 } = req.query;
     const query = {};
-    
+
     if (status === 'available') query.isAvailable = true;
     if (status === 'busy') query.isAvailable = false;
     if (status === 'online') query.isOnline = true;
@@ -255,17 +255,17 @@ export const getAllDrivers = async (req, res) => {
       }
     }
     if (verificationStatus) query.verificationStatus = verificationStatus;
-    
+
     const pageNum = parseInt(page, 10) || 1;
     const limitNum = parseInt(limit, 10) || 10;
-    
+
     const drivers = await Driver.find(query)
       .skip((pageNum - 1) * limitNum)
       .limit(limitNum)
       .sort({ createdAt: -1 });
-    
+
     const total = await Driver.countDocuments(query);
-    
+
     res.json({
       success: true,
       data: drivers,
@@ -278,9 +278,9 @@ export const getAllDrivers = async (req, res) => {
     });
   } catch (error) {
     console.error('Error in getAllDrivers:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -290,20 +290,20 @@ export const getDriverById = async (req, res) => {
   try {
     const driver = await Driver.findById(req.params.id);
     if (!driver) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Driver not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
       });
     }
-    res.json({ 
-      success: true, 
-      data: driver 
+    res.json({
+      success: true,
+      data: driver
     });
   } catch (error) {
     console.error('Error in getDriverById:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -313,21 +313,21 @@ export const createDriver = async (req, res) => {
   try {
     const driver = new Driver(req.body);
     await driver.save();
-    
+
     const io = req.app.get('io');
     if (io) {
       io.emit('driver:created', driver);
     }
-    
-    res.status(201).json({ 
-      success: true, 
-      data: driver 
+
+    res.status(201).json({
+      success: true,
+      data: driver
     });
   } catch (error) {
     console.error('Error in createDriver:', error);
-    res.status(400).json({ 
-      success: false, 
-      message: error.message 
+    res.status(400).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -340,28 +340,28 @@ export const updateDriver = async (req, res) => {
       req.body,
       { new: true, runValidators: true }
     );
-    
+
     if (!driver) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Driver not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
       });
     }
-    
+
     const io = req.app.get('io');
     if (io) {
       io.emit('driver:updated', driver);
     }
-    
-    res.json({ 
-      success: true, 
-      data: driver 
+
+    res.json({
+      success: true,
+      data: driver
     });
   } catch (error) {
     console.error('Error in updateDriver:', error);
-    res.status(400).json({ 
-      success: false, 
-      message: error.message 
+    res.status(400).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -374,28 +374,28 @@ export const deleteDriver = async (req, res) => {
       { isActive: false, isOnline: false, isAvailable: false },
       { new: true }
     );
-    
+
     if (!driver) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Driver not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
       });
     }
-    
+
     const io = req.app.get('io');
     if (io) {
       io.emit('driver:deleted', { id: req.params.id });
     }
-    
-    res.json({ 
-      success: true, 
-      message: 'Driver deleted successfully' 
+
+    res.json({
+      success: true,
+      message: 'Driver deleted successfully'
     });
   } catch (error) {
     console.error('Error in deleteDriver:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -404,7 +404,7 @@ export const deleteDriver = async (req, res) => {
 export const updateDriverLocation = async (req, res) => {
   try {
     const { latitude, longitude } = req.body;
-    
+
     const driver = await Driver.findByIdAndUpdate(
       req.params.id,
       {
@@ -415,14 +415,14 @@ export const updateDriverLocation = async (req, res) => {
       },
       { new: true }
     );
-    
+
     if (!driver) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Driver not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
       });
     }
-    
+
     const io = req.app.get('io');
     if (io) {
       io.emit('driver:location-update', {
@@ -431,16 +431,16 @@ export const updateDriverLocation = async (req, res) => {
         timestamp: new Date()
       });
     }
-    
-    res.json({ 
-      success: true, 
-      data: driver 
+
+    res.json({
+      success: true,
+      data: driver
     });
   } catch (error) {
     console.error('Error in updateDriverLocation:', error);
-    res.status(400).json({ 
-      success: false, 
-      message: error.message 
+    res.status(400).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -449,20 +449,20 @@ export const updateDriverLocation = async (req, res) => {
 export const updateDriverAvailability = async (req, res) => {
   try {
     const { isAvailable } = req.body;
-    
+
     const driver = await Driver.findByIdAndUpdate(
       req.params.id,
       { isAvailable },
       { new: true }
     );
-    
+
     if (!driver) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Driver not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
       });
     }
-    
+
     const io = req.app.get('io');
     if (io) {
       io.emit('driver:availability-change', {
@@ -471,16 +471,16 @@ export const updateDriverAvailability = async (req, res) => {
         timestamp: new Date()
       });
     }
-    
-    res.json({ 
-      success: true, 
-      data: driver 
+
+    res.json({
+      success: true,
+      data: driver
     });
   } catch (error) {
     console.error('Error in updateDriverAvailability:', error);
-    res.status(400).json({ 
-      success: false, 
-      message: error.message 
+    res.status(400).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -488,12 +488,8 @@ export const updateDriverAvailability = async (req, res) => {
 // Get available drivers (public)
 export const getAvailableDrivers = async (req, res) => {
   try {
-<<<<<<< HEAD
     const { vehicleType, latitude, longitude, radius = 15000 } = req.query;
-=======
-    const { vehicleType, latitude, longitude, radius = 5000 } = req.query;
->>>>>>> e6a22a521443e263773a48df57882aec112a43da
-    
+
     const query = {
       isActive: true,
       isOnline: true,
@@ -501,11 +497,11 @@ export const getAvailableDrivers = async (req, res) => {
       isBlocked: false,
       verificationStatus: 'verified'
     };
-    
+
     if (vehicleType) query.vehicleType = vehicleType;
-    
+
     let drivers;
-    
+
     if (latitude && longitude) {
       drivers = await Driver.find({
         ...query,
@@ -522,16 +518,16 @@ export const getAvailableDrivers = async (req, res) => {
     } else {
       drivers = await Driver.find(query).select('-__v');
     }
-    
-    res.json({ 
-      success: true, 
-      data: drivers 
+
+    res.json({
+      success: true,
+      data: drivers
     });
   } catch (error) {
     console.error('Error in getAvailableDrivers:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -541,7 +537,7 @@ export const submitForVerification = async (req, res) => {
   try {
     const driverId = req.driver.id;
     const { documents } = req.body;
-    
+
     const driver = await Driver.findByIdAndUpdate(
       driverId,
       {
@@ -551,14 +547,14 @@ export const submitForVerification = async (req, res) => {
       },
       { new: true }
     );
-    
+
     if (!driver) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Driver not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
       });
     }
-    
+
     const io = req.app.get('io');
     if (io) {
       io.emit('driver:verification-submitted', {
@@ -566,17 +562,17 @@ export const submitForVerification = async (req, res) => {
         timestamp: new Date()
       });
     }
-    
-    res.json({ 
-      success: true, 
-      data: driver, 
-      message: 'Documents submitted for verification' 
+
+    res.json({
+      success: true,
+      data: driver,
+      message: 'Documents submitted for verification'
     });
   } catch (error) {
     console.error('Error in submitForVerification:', error);
-    res.status(400).json({ 
-      success: false, 
-      message: error.message 
+    res.status(400).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -594,14 +590,14 @@ export const verifyDriver = async (req, res) => {
       },
       { new: true }
     );
-    
+
     if (!driver) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Driver not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
       });
     }
-    
+
     const io = req.app.get('io');
     if (io) {
       io.emit('driver:verified', {
@@ -609,17 +605,17 @@ export const verifyDriver = async (req, res) => {
         timestamp: new Date()
       });
     }
-    
-    res.json({ 
-      success: true, 
-      data: driver, 
-      message: 'Driver verified successfully' 
+
+    res.json({
+      success: true,
+      data: driver,
+      message: 'Driver verified successfully'
     });
   } catch (error) {
     console.error('Error in verifyDriver:', error);
-    res.status(400).json({ 
-      success: false, 
-      message: error.message 
+    res.status(400).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -628,7 +624,7 @@ export const verifyDriver = async (req, res) => {
 export const rejectDriver = async (req, res) => {
   try {
     const { reason } = req.body;
-    
+
     const driver = await Driver.findByIdAndUpdate(
       req.params.id,
       {
@@ -639,14 +635,14 @@ export const rejectDriver = async (req, res) => {
       },
       { new: true }
     );
-    
+
     if (!driver) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Driver not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
       });
     }
-    
+
     const io = req.app.get('io');
     if (io) {
       io.emit('driver:rejected', {
@@ -655,17 +651,17 @@ export const rejectDriver = async (req, res) => {
         timestamp: new Date()
       });
     }
-    
-    res.json({ 
-      success: true, 
-      data: driver, 
-      message: 'Driver verification rejected' 
+
+    res.json({
+      success: true,
+      data: driver,
+      message: 'Driver verification rejected'
     });
   } catch (error) {
     console.error('Error in rejectDriver:', error);
-    res.status(400).json({ 
-      success: false, 
-      message: error.message 
+    res.status(400).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -674,20 +670,20 @@ export const rejectDriver = async (req, res) => {
 export const getPendingVerifications = async (req, res) => {
   try {
     const { page = 1, limit = 10 } = req.query;
-    
+
     const query = {
       verificationStatus: { $in: ['pending', 'under_review'] }
     };
     const pageNum = parseInt(page, 10) || 1;
     const limitNum = parseInt(limit, 10) || 10;
-    
+
     const drivers = await Driver.find(query)
       .skip((pageNum - 1) * limitNum)
       .limit(limitNum)
       .sort({ submittedAt: -1 });
-    
+
     const total = await Driver.countDocuments(query);
-    
+
     res.json({
       success: true,
       data: drivers,
@@ -700,9 +696,9 @@ export const getPendingVerifications = async (req, res) => {
     });
   } catch (error) {
     console.error('Error in getPendingVerifications:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -711,21 +707,21 @@ export const getPendingVerifications = async (req, res) => {
 export const toggleBlockDriver = async (req, res) => {
   try {
     const driver = await Driver.findById(req.params.id);
-    
+
     if (!driver) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Driver not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
       });
     }
-    
+
     driver.isBlocked = !driver.isBlocked;
     if (driver.isBlocked) {
       driver.isOnline = false;
       driver.isAvailable = false;
     }
     await driver.save();
-    
+
     const io = req.app.get('io');
     if (io) {
       io.emit('driver:block-status-changed', {
@@ -734,17 +730,17 @@ export const toggleBlockDriver = async (req, res) => {
         timestamp: new Date()
       });
     }
-    
-    res.json({ 
-      success: true, 
-      data: driver, 
-      message: `Driver ${driver.isBlocked ? 'blocked' : 'unblocked'} successfully` 
+
+    res.json({
+      success: true,
+      data: driver,
+      message: `Driver ${driver.isBlocked ? 'blocked' : 'unblocked'} successfully`
     });
   } catch (error) {
     console.error('Error in toggleBlockDriver:', error);
-    res.status(400).json({ 
-      success: false, 
-      message: error.message 
+    res.status(400).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -753,20 +749,20 @@ export const toggleBlockDriver = async (req, res) => {
 export const updateDriverDocuments = async (req, res) => {
   try {
     const { documents } = req.body;
-    
+
     const driver = await Driver.findByIdAndUpdate(
       req.params.id,
       { documents },
       { new: true, runValidators: true }
     );
-    
+
     if (!driver) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Driver not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
       });
     }
-    
+
     const io = req.app.get('io');
     if (io) {
       io.emit('driver:documents-updated', {
@@ -775,17 +771,17 @@ export const updateDriverDocuments = async (req, res) => {
         timestamp: new Date()
       });
     }
-    
-    res.json({ 
-      success: true, 
-      data: driver, 
-      message: 'Documents updated successfully' 
+
+    res.json({
+      success: true,
+      data: driver,
+      message: 'Documents updated successfully'
     });
   } catch (error) {
     console.error('Error in updateDriverDocuments:', error);
-    res.status(400).json({ 
-      success: false, 
-      message: error.message 
+    res.status(400).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -794,19 +790,19 @@ export const updateDriverDocuments = async (req, res) => {
 export const toggleDriverActive = async (req, res) => {
   try {
     const driver = await Driver.findById(req.params.id);
-    
+
     if (!driver) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Driver not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
       });
     }
-    
+
     driver.isOnline = !driver.isOnline;
     driver.isAvailable = driver.isOnline;
     driver.lastOnlineAt = driver.isOnline ? null : new Date();
     await driver.save();
-    
+
     const io = req.app.get('io');
     if (io) {
       io.emit('driver:active-status-changed', {
@@ -815,17 +811,17 @@ export const toggleDriverActive = async (req, res) => {
         timestamp: new Date()
       });
     }
-    
-    res.json({ 
-      success: true, 
-      data: driver, 
-      message: driver.isOnline ? 'Driver is now online' : 'Driver is now offline' 
+
+    res.json({
+      success: true,
+      data: driver,
+      message: driver.isOnline ? 'Driver is now online' : 'Driver is now offline'
     });
   } catch (error) {
     console.error('Error in toggleDriverActive:', error);
-    res.status(400).json({ 
-      success: false, 
-      message: error.message 
+    res.status(400).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -846,11 +842,11 @@ async function findNearbyCustomers(latitude, longitude, radius) {
     }).populate('customer.customerId');
 
     const nearbyCustomers = [];
-    
+
     for (const ride of searchingRides) {
       const [pickupLon, pickupLat] = ride.pickupLocation.coordinates;
       const distance = calculateDistance(latitude, longitude, pickupLat, pickupLon);
-      
+
       if (distance <= radius) {
         nearbyCustomers.push({
           customerId: ride.customer.customerId,
@@ -860,14 +856,10 @@ async function findNearbyCustomers(latitude, longitude, radius) {
         });
       }
     }
-    
+
     return nearbyCustomers;
   } catch (error) {
     console.error('Error finding nearby customers:', error);
     return [];
   }
-}
-<<<<<<< HEAD
-
-=======
->>>>>>> e6a22a521443e263773a48df57882aec112a43da
+};

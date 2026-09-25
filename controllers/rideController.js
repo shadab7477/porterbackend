@@ -419,11 +419,7 @@ export const getDriverPendingRequests = async (req, res) => {
               coordinates: [parseFloat(driverLon), parseFloat(driverLat)]
             },
             distanceField: 'distanceFromDriver',
-<<<<<<< HEAD
             maxDistance: 15 * 1000,
-=======
-            maxDistance: 5 * 1000,
->>>>>>> e6a22a521443e263773a48df57882aec112a43da
             spherical: true,
             query: {
               status: 'searching',
@@ -488,11 +484,7 @@ export const getDriverPendingRequests = async (req, res) => {
                 type: 'Point',
                 coordinates: [parseFloat(driverLon), parseFloat(driverLat)]
               },
-<<<<<<< HEAD
               $maxDistance: 15000
-=======
-              $maxDistance: 5000
->>>>>>> e6a22a521443e263773a48df57882aec112a43da
             }
           }
         })
@@ -543,11 +535,7 @@ export const getDriverPendingRequests = async (req, res) => {
               distanceFromDriver: distance * 1000
             };
           })
-<<<<<<< HEAD
           .filter(ride => ride.distanceFromDriver <= 15000)
-=======
-          .filter(ride => ride.distanceFromDriver <= 5000)
->>>>>>> e6a22a521443e263773a48df57882aec112a43da
           .sort((a, b) => a.distanceFromDriver - b.distanceFromDriver)
           .slice(0, 20);
 
@@ -575,11 +563,7 @@ async function processRides(pendingRides, driver, driverId, driverLat, driverLon
       data: {
         pendingRequests: [],
         count: 0,
-<<<<<<< HEAD
         message: 'No ride requests available within 15km of your location',
-=======
-        message: 'No ride requests available within 5km of your location',
->>>>>>> e6a22a521443e263773a48df57882aec112a43da
         driverLocation: {
           coordinates: [driverLon, driverLat],
           address: driver.currentLocation.address || 'Current location'
@@ -706,11 +690,7 @@ async function processRides(pendingRides, driver, driverId, driverLat, driverLon
     data: {
       pendingRequests: validRequests,
       count: validRequests.length,
-<<<<<<< HEAD
       searchRadius: 15,
-=======
-      searchRadius: 5,
->>>>>>> e6a22a521443e263773a48df57882aec112a43da
       driverLocation: {
         coordinates: [driverLon, driverLat],
         address: driver.currentLocation.address || 'Current location'
@@ -1043,11 +1023,7 @@ export const requestRide = async (req, res) => {
 };
 
 // 2. Find nearby drivers (internal function)
-<<<<<<< HEAD
 const findNearbyDrivers = async (ride, io, radius = 15) => {
-=======
-const findNearbyDrivers = async (ride, io, radius = 5) => {
->>>>>>> e6a22a521443e263773a48df57882aec112a43da
   try {
     const [longitude, latitude] = ride.pickupLocation.coordinates;
 
@@ -2849,11 +2825,7 @@ export const updateDriverLocation = async (req, res) => {
 // 17. Get nearby drivers
 export const getNearbyDrivers = async (req, res) => {
   try {
-<<<<<<< HEAD
     const { latitude, longitude, radius = 15, vehicleType } = req.query;
-=======
-    const { latitude, longitude, radius = 5, vehicleType } = req.query;
->>>>>>> e6a22a521443e263773a48df57882aec112a43da
 
     if (!latitude || !longitude) {
       return res.status(400).json({
@@ -3070,11 +3042,7 @@ export const calculateFareEstimate = async (req, res) => {
             coordinates: [parseFloat(pickupLon), parseFloat(pickupLat)]
           },
           distanceField: 'distance',
-<<<<<<< HEAD
           maxDistance: 15 * 1000,
-=======
-          maxDistance: 5 * 1000,
->>>>>>> e6a22a521443e263773a48df57882aec112a43da
           spherical: true,
           query: {
             isOnline: true,
@@ -3184,11 +3152,7 @@ export const updateDriverLocationWithSocket = async (req, res) => {
       rideTrackingNsp.to(`ride:${rideId}`).emit('driver:location-updated', locationData);
     } else {
       // Broadcast to nearby customers looking for rides
-<<<<<<< HEAD
       const nearbyCustomers = await findNearbyCustomers(latitude, longitude, 15);
-=======
-      const nearbyCustomers = await findNearbyCustomers(latitude, longitude, 5);
->>>>>>> e6a22a521443e263773a48df57882aec112a43da
       nearbyCustomers.forEach(customer => {
         io.to(`customer:${customer.customerId}`).emit('driver:nearby', {
           driverId,
@@ -3652,8 +3616,4 @@ export {
   findNearbyDrivers,
   handleDriverResponseTimeout
 };
-<<<<<<< HEAD
 
-
-=======
->>>>>>> e6a22a521443e263773a48df57882aec112a43da

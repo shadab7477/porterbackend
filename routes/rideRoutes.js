@@ -33,7 +33,6 @@ import driverAuthMiddleware from '../middleware/driverAuthMiddleware.js';
 import { validateCancelRide } from '../middleware/validateCancelRide.js';
 export const getAllRides = async (req, res) => {
   try {
-<<<<<<< HEAD
     const {
       page = 1,
       limit = 20,
@@ -177,34 +176,11 @@ export const getAllRides = async (req, res) => {
       Ride.countDocuments({ status: 'completed' }),
       Ride.countDocuments({ status: { $in: ['cancelled', 'no_drivers'] } })
     ]);
-=======
-    const { page = 1, limit = 10, status, search } = req.query;
-    const query = {};
-    if (status) query.status = status;
-
-    if (search) {
-      query['$or'] = [
-        { rideId: { $regex: search, $options: 'i' } },
-        { 'customer.name': { $regex: search, $options: 'i' } },
-        { 'customer.phone': { $regex: search, $options: 'i' } },
-        { 'driver.name': { $regex: search, $options: 'i' } },
-        { 'driver.phone': { $regex: search, $options: 'i' } }
-      ];
-    }
-
-    const rides = await Ride.find(query)
-      .sort({ requestedAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
-
-    const total = await Ride.countDocuments(query);
->>>>>>> e6a22a521443e263773a48df57882aec112a43da
 
     res.json({
       success: true,
       data: rides,
       pagination: {
-<<<<<<< HEAD
         page: pageNum,
         limit: limitNum,
         total,
@@ -215,12 +191,6 @@ export const getAllRides = async (req, res) => {
         active: totalActive,
         completed: totalCompleted,
         cancelled: totalCancelled
-=======
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / limit)
->>>>>>> e6a22a521443e263773a48df57882aec112a43da
       }
     });
   } catch (error) {
