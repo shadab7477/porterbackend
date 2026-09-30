@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import Driver from '../models/Driver.js';
 import DriverApplication from '../models/DriverApplication.js';
 import DriverWallet from '../models/DriverWallet.js';
@@ -614,9 +615,31 @@ export const getDriverById = async (req, res) => {
 export const getDriverRideHistoryForAdmin = async (req, res) => {
   try {
     const { id } = req.params;
-    const { page = 1, limit = 20, status, search, startDate, endDate } = req.query;
+    const {
+      page = 1,
+      limit = 20,
+      status,
+      search,
+      startDate,
+      endDate,
+      paymentMethod,
+      paymentStatus,
+      sortBy = 'newest'
+    } = req.query;
 
-    const driver = await Driver.findById(id).lean();
+    let driver = null;
+    if (mongoose.isValidObjectId(id)) {
+      driver = await Driver.findById(id).lean();
+    }
+    if (!driver) {
+      driver = await Driver.findOne({
+        $or: [
+          { driverId: id },
+          { phone: id }
+        ]
+      }).lean();
+    }
+
     if (!driver) {
       return res.status(404).json({
         success: false,
@@ -624,14 +647,26 @@ export const getDriverRideHistoryForAdmin = async (req, res) => {
       });
     }
 
+    // Build driver matching conditions safely without CastError
+    const driverConditions = [];
+    if (mongoose.isValidObjectId(driver._id)) {
+      driverConditions.push({ 'driver.driverId': new mongoose.Types.ObjectId(driver._id) });
+    }
+    if (driver.phone) {
+      driverConditions.push({ 'driver.phone': driver.phone.trim() });
+    }
+    if (driver.vehicleNumber) {
+      driverConditions.push({ 'driver.vehicleNumber': driver.vehicleNumber.trim() });
+    }
+    if (driverConditions.length === 0 && driver.name) {
+      driverConditions.push({ 'driver.name': driver.name.trim() });
+    }
+
     const query = {
-      $or: [
-        { 'driver.driverId': driver._id },
-        ...(driver.driverId ? [{ 'driver.driverId': driver.driverId }] : []),
-        ...(driver.phone ? [{ 'driver.phone': driver.phone }] : [])
-      ]
+      $or: driverConditions
     };
 
+    // Status filter
     if (status && status !== 'all') {
       if (status === 'active') {
         query.status = { $in: ['requested', 'searching', 'driver_assigned', 'driver_arrived', 'in_progress'] };
@@ -644,8 +679,20 @@ export const getDriverRideHistoryForAdmin = async (req, res) => {
       }
     }
 
+    // Payment method filter
+    if (paymentMethod && paymentMethod !== 'all') {
+      query.paymentMethod = paymentMethod;
+    }
+
+    // Payment status filter
+    if (paymentStatus && paymentStatus !== 'all') {
+      query.paymentStatus = paymentStatus;
+    }
+
+    // Search filter across rideId, customer name/phone, locations, cancellation reason
     if (search && search.trim()) {
-      const sRegex = new RegExp(search.trim().replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'i');
+      const cleanSearch = search.trim();
+      const sRegex = new RegExp(cleanSearch.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'i');
       query.$and = query.$and || [];
       query.$and.push({
         $or: [
@@ -653,11 +700,13 @@ export const getDriverRideHistoryForAdmin = async (req, res) => {
           { 'customer.name': sRegex },
           { 'customer.phone': sRegex },
           { 'pickupLocation.address': sRegex },
-          { 'dropLocation.address': sRegex }
+          { 'dropLocation.address': sRegex },
+          { cancellationReason: sRegex }
         ]
       });
     }
 
+    // Date range
     if (startDate || endDate) {
       const dateCondition = {};
       if (startDate) {
@@ -676,30 +725,42 @@ export const getDriverRideHistoryForAdmin = async (req, res) => {
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
 
+    // Sort order
+    let sortObj = { requestedAt: -1, createdAt: -1 };
+    if (sortBy === 'oldest') {
+      sortObj = { requestedAt: 1, createdAt: 1 };
+    } else if (sortBy === 'fare_high') {
+      sortObj = { 'fare.finalAmount': -1 };
+    } else if (sortBy === 'fare_low') {
+      sortObj = { 'fare.finalAmount': 1 };
+    } else if (sortBy === 'distance_high') {
+      sortObj = { distance: -1 };
+    }
+
     const [rides, total, statsAggregation] = await Promise.all([
       Ride.find(query)
-        .sort({ requestedAt: -1, createdAt: -1 })
+        .sort(sortObj)
         .skip((pageNum - 1) * limitNum)
         .limit(limitNum)
         .lean(),
       Ride.countDocuments(query),
       Ride.aggregate([
-        {
-          $match: {
-            $or: [
-              { 'driver.driverId': driver._id },
-              ...(driver.driverId ? [{ 'driver.driverId': driver.driverId }] : []),
-              ...(driver.phone ? [{ 'driver.phone': driver.phone }] : [])
-            ]
-          }
-        },
+        { $match: { $or: driverConditions } },
         {
           $group: {
             _id: null,
             totalRides: { $sum: 1 },
             completedRides: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
             cancelledRides: { $sum: { $cond: [{ $in: ['$status', ['cancelled', 'no_drivers']] }, 1, 0] } },
-            activeRides: { $sum: { $cond: [{ $in: ['$status', ['requested', 'searching', 'driver_assigned', 'driver_arrived', 'in_progress']] }, 1, 0] } },
+            activeRides: {
+              $sum: {
+                $cond: [
+                  { $in: ['$status', ['requested', 'searching', 'driver_assigned', 'driver_arrived', 'in_progress']] },
+                  1,
+                  0
+                ]
+              }
+            },
             totalFare: { $sum: '$fare.finalAmount' },
             totalDriverEarnings: { $sum: '$fare.driverEarning' },
             totalCommission: { $sum: '$fare.commissionAmount' },
@@ -723,7 +784,7 @@ export const getDriverRideHistoryForAdmin = async (req, res) => {
             }
           }
         }
-      ])
+      ]).catch(() => [])
     ]);
 
     const stats = statsAggregation[0] || {
@@ -762,7 +823,13 @@ export const getDriverRideHistoryForAdmin = async (req, res) => {
           pickupAddress: r.pickupLocation?.address || 'Pickup location',
           dropAddress: r.dropLocation?.address || (r.dropLocations?.[0]?.address) || 'Drop location',
           customerName: r.customer?.name || 'Customer',
-          customerPhone: r.customer?.phone || 'N/A'
+          customerPhone: r.customer?.phone || 'N/A',
+          customerRating: r.customer?.rating || 0,
+          statusHistory: r.statusHistory || [],
+          cancellationReason: r.cancellationReason || '',
+          cancelledBy: r.cancelledBy || '',
+          paymentMethod: r.paymentMethod || 'cash',
+          paymentStatus: r.paymentStatus || 'pending'
         })),
         stats,
         pagination: {
