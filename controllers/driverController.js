@@ -611,6 +611,64 @@ export const getDriverById = async (req, res) => {
   }
 };
 
+// Helper to parse ride fare across all database schema variations (number or object)
+const parseRideFare = (fare) => {
+  if (typeof fare === 'number') {
+    const finalAmount = Math.round(fare * 100) / 100;
+    const commission = Math.round(finalAmount * 0.15 * 100) / 100;
+    const driverEarning = Math.round((finalAmount - commission) * 100) / 100;
+    return {
+      distanceFare: finalAmount,
+      total: finalAmount,
+      discount: 0,
+      cashbackAmount: 0,
+      finalAmount,
+      commissionAmount: commission,
+      driverEarning,
+      isMerchantRide: false,
+      merchantDiscount: 0
+    };
+  }
+
+  if (fare && typeof fare === 'object') {
+    const finalAmount = Number(fare.finalAmount ?? fare.total ?? fare.amount ?? 0);
+    const total = Number(fare.total ?? fare.finalAmount ?? fare.amount ?? 0);
+    const commissionAmount = Number(
+      fare.commissionAmount ?? (finalAmount > 0 ? Math.round(finalAmount * 0.15 * 100) / 100 : 0)
+    );
+    const driverEarning = Number(
+      fare.driverEarning ?? (finalAmount > 0 ? Math.round((finalAmount - commissionAmount) * 100) / 100 : 0)
+    );
+    const distanceFare = Number(fare.distanceFare ?? total);
+    const discount = Number(fare.discount ?? 0);
+    const cashbackAmount = Number(fare.cashbackAmount ?? 0);
+
+    return {
+      distanceFare,
+      total,
+      discount,
+      cashbackAmount,
+      finalAmount,
+      commissionAmount,
+      driverEarning,
+      isMerchantRide: !!fare.isMerchantRide,
+      merchantDiscount: fare.merchantDiscount || 0
+    };
+  }
+
+  return {
+    distanceFare: 0,
+    total: 0,
+    discount: 0,
+    cashbackAmount: 0,
+    finalAmount: 0,
+    commissionAmount: 0,
+    driverEarning: 0,
+    isMerchantRide: false,
+    merchantDiscount: 0
+  };
+};
+
 // Get driver's full ride history (admin)
 export const getDriverRideHistoryForAdmin = async (req, res) => {
   try {
@@ -730,12 +788,57 @@ export const getDriverRideHistoryForAdmin = async (req, res) => {
     if (sortBy === 'oldest') {
       sortObj = { requestedAt: 1, createdAt: 1 };
     } else if (sortBy === 'fare_high') {
-      sortObj = { 'fare.finalAmount': -1 };
+      sortObj = { 'fare.finalAmount': -1, fare: -1 };
     } else if (sortBy === 'fare_low') {
-      sortObj = { 'fare.finalAmount': 1 };
+      sortObj = { 'fare.finalAmount': 1, fare: 1 };
     } else if (sortBy === 'distance_high') {
       sortObj = { distance: -1 };
     }
+
+    // MongoDB aggregation expressions supporting both number fares and object fares
+    const fareAmountExpr = {
+      $cond: [
+        { $isNumber: '$fare' },
+        '$fare',
+        { $ifNull: ['$fare.finalAmount', { $ifNull: ['$fare.total', 0] }] }
+      ]
+    };
+
+    const driverEarningExpr = {
+      $cond: [
+        { $isNumber: '$fare' },
+        { $multiply: ['$fare', 0.85] },
+        {
+          $ifNull: [
+            '$fare.driverEarning',
+            {
+              $multiply: [
+                { $ifNull: ['$fare.finalAmount', { $ifNull: ['$fare.total', 0] }] },
+                0.85
+              ]
+            }
+          ]
+        }
+      ]
+    };
+
+    const commissionExpr = {
+      $cond: [
+        { $isNumber: '$fare' },
+        { $multiply: ['$fare', 0.15] },
+        {
+          $ifNull: [
+            '$fare.commissionAmount',
+            {
+              $multiply: [
+                { $ifNull: ['$fare.finalAmount', { $ifNull: ['$fare.total', 0] }] },
+                0.15
+              ]
+            }
+          ]
+        }
+      ]
+    };
 
     const [rides, total, statsAggregation] = await Promise.all([
       Ride.find(query)
@@ -761,14 +864,14 @@ export const getDriverRideHistoryForAdmin = async (req, res) => {
                 ]
               }
             },
-            totalFare: { $sum: '$fare.finalAmount' },
-            totalDriverEarnings: { $sum: '$fare.driverEarning' },
-            totalCommission: { $sum: '$fare.commissionAmount' },
+            totalFare: { $sum: fareAmountExpr },
+            totalDriverEarnings: { $sum: driverEarningExpr },
+            totalCommission: { $sum: commissionExpr },
             cashCollections: {
               $sum: {
                 $cond: [
                   { $and: [{ $eq: ['$status', 'completed'] }, { $eq: ['$paymentMethod', 'cash'] }] },
-                  '$fare.finalAmount',
+                  fareAmountExpr,
                   0
                 ]
               }
@@ -777,7 +880,7 @@ export const getDriverRideHistoryForAdmin = async (req, res) => {
               $sum: {
                 $cond: [
                   { $and: [{ $eq: ['$status', 'completed'] }, { $ne: ['$paymentMethod', 'cash'] }] },
-                  '$fare.driverEarning',
+                  driverEarningExpr,
                   0
                 ]
               }
@@ -810,27 +913,31 @@ export const getDriverRideHistoryForAdmin = async (req, res) => {
           vehicleNumber: driver.vehicleNumber,
           rating: driver.rating
         },
-        rides: rides.map(r => ({
-          ...r,
-          id: r._id,
-          rideId: r.rideId || r._id.toString(),
-          date: r.requestedAt || r.createdAt,
-          distanceText: r.routeInfo?.distanceText || `${r.distance || 0} km`,
-          durationText: r.routeInfo?.durationText || `${r.duration || 0} mins`,
-          fareFinal: r.fare?.finalAmount || r.fare?.total || 0,
-          driverEarning: r.fare?.driverEarning || 0,
-          commission: r.fare?.commissionAmount || 0,
-          pickupAddress: r.pickupLocation?.address || 'Pickup location',
-          dropAddress: r.dropLocation?.address || (r.dropLocations?.[0]?.address) || 'Drop location',
-          customerName: r.customer?.name || 'Customer',
-          customerPhone: r.customer?.phone || 'N/A',
-          customerRating: r.customer?.rating || 0,
-          statusHistory: r.statusHistory || [],
-          cancellationReason: r.cancellationReason || '',
-          cancelledBy: r.cancelledBy || '',
-          paymentMethod: r.paymentMethod || 'cash',
-          paymentStatus: r.paymentStatus || 'pending'
-        })),
+        rides: rides.map(r => {
+          const parsedFare = parseRideFare(r.fare);
+          return {
+            ...r,
+            id: r._id,
+            rideId: r.rideId || r._id.toString(),
+            date: r.requestedAt || r.createdAt,
+            distanceText: r.routeInfo?.distanceText || `${r.distance || 0} km`,
+            durationText: r.routeInfo?.durationText || `${r.duration || 0} mins`,
+            fare: parsedFare,
+            fareFinal: parsedFare.finalAmount,
+            driverEarning: parsedFare.driverEarning,
+            commission: parsedFare.commissionAmount,
+            pickupAddress: r.pickupLocation?.address || 'Pickup location',
+            dropAddress: r.dropLocation?.address || (r.dropLocations?.[0]?.address) || 'Drop location',
+            customerName: r.customer?.name || 'Customer',
+            customerPhone: r.customer?.phone || 'N/A',
+            customerRating: r.customer?.rating || 0,
+            statusHistory: r.statusHistory || [],
+            cancellationReason: r.cancellationReason || '',
+            cancelledBy: r.cancelledBy || '',
+            paymentMethod: r.paymentMethod || 'cash',
+            paymentStatus: r.paymentStatus || 'pending'
+          };
+        }),
         stats,
         pagination: {
           page: pageNum,
