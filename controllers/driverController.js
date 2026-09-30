@@ -1,4 +1,7 @@
 import Driver from '../models/Driver.js';
+import DriverApplication from '../models/DriverApplication.js';
+import DriverWallet from '../models/DriverWallet.js';
+import Ride from '../models/Ride.js';
 
 // ==================== DRIVER SELF-SERVICE FUNCTIONS ====================
 
@@ -235,13 +238,34 @@ export const getDriverStats = async (req, res) => {
 // Get all drivers (admin only)
 export const getAllDrivers = async (req, res) => {
   try {
-    const { status, vehicleType, verificationStatus, page = 1, limit = 10 } = req.query;
+    const {
+      status,
+      vehicleType,
+      verificationStatus,
+      isBlocked,
+      dueStatus,
+      search,
+      sortBy = 'recent',
+      page = 1,
+      limit = 50
+    } = req.query;
+
     const query = {};
 
-    if (status === 'available') query.isAvailable = true;
-    if (status === 'busy') query.isAvailable = false;
-    if (status === 'online') query.isOnline = true;
-    if (status === 'offline') query.isOnline = false;
+    // Online / Available / Offline / Busy status
+    if (status === 'available') {
+      query.isOnline = true;
+      query.isAvailable = true;
+    } else if (status === 'busy') {
+      query.isOnline = true;
+      query.isAvailable = false;
+    } else if (status === 'online') {
+      query.isOnline = true;
+    } else if (status === 'offline') {
+      query.isOnline = false;
+    }
+
+    // Vehicle Type
     if (vehicleType && vehicleType !== 'all') {
       const vLower = vehicleType.trim().toLowerCase();
       if (vLower === '2_wheelers' || vLower === '2 wheelers' || vLower === '2wheeler') {
@@ -254,26 +278,225 @@ export const getAllDrivers = async (req, res) => {
         query.vehicleType = { $regex: new RegExp(vehicleType.trim().replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'i') };
       }
     }
-    if (verificationStatus) query.verificationStatus = verificationStatus;
 
-    const pageNum = parseInt(page, 10) || 1;
-    const limitNum = parseInt(limit, 10) || 10;
+    // Block status filter
+    if (isBlocked === 'true' || isBlocked === true || isBlocked === 'blocked') {
+      query.isBlocked = true;
+    } else if (isBlocked === 'false' || isBlocked === false || isBlocked === 'active' || isBlocked === 'unblocked') {
+      query.isBlocked = false;
+    }
 
-    const drivers = await Driver.find(query)
-      .skip((pageNum - 1) * limitNum)
-      .limit(limitNum)
-      .sort({ createdAt: -1 });
+    // Search filter across name, phone, vehicleNumber, driverId, email
+    if (search && search.trim()) {
+      const sRegex = new RegExp(search.trim().replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'i');
+      query.$or = [
+        { name: sRegex },
+        { phone: sRegex },
+        { vehicleNumber: sRegex },
+        { driverId: sRegex },
+        { email: sRegex }
+      ];
+    }
 
-    const total = await Driver.countDocuments(query);
+    // Fetch drivers matching base query
+    const rawDrivers = await Driver.find(query).lean();
+
+    // Collect IDs for batch lookups
+    const appIds = rawDrivers.map(d => d.applicationId).filter(Boolean);
+    const phones = rawDrivers.map(d => d.phone).filter(Boolean);
+    const driverIds = rawDrivers.map(d => d.driverId).filter(Boolean);
+    const driverObjectIds = rawDrivers.map(d => d._id);
+
+    const orConditions = [];
+    if (appIds.length > 0) orConditions.push({ _id: { $in: appIds } });
+    if (phones.length > 0) orConditions.push({ phone: { $in: phones } });
+    if (driverIds.length > 0) orConditions.push({ driverId: { $in: driverIds } });
+
+    const [applications, wallets] = await Promise.all([
+      orConditions.length > 0 ? DriverApplication.find({ $or: orConditions }).lean() : [],
+      driverObjectIds.length > 0 ? DriverWallet.find({ driverId: { $in: driverObjectIds } }).lean() : []
+    ]);
+
+    const appMap = new Map();
+    applications.forEach(app => {
+      if (app._id) appMap.set(app._id.toString(), app);
+      if (app.phone) appMap.set(app.phone, app);
+      if (app.driverId) appMap.set(app.driverId, app);
+    });
+
+    const walletMap = new Map();
+    wallets.forEach(w => {
+      if (w.driverId) walletMap.set(w.driverId.toString(), w);
+    });
+
+    // Helper for due limit
+    const getVehicleDueLimit = (vType) => {
+      const lower = (vType || 'bike').toLowerCase();
+      if (lower.includes('bike') || lower.includes('scoot')) return 300;
+      return 700;
+    };
+
+    // Enrich all found drivers
+    let enriched = rawDrivers.map(driver => {
+      const app = (driver.applicationId && appMap.get(driver.applicationId.toString())) ||
+                  appMap.get(driver.phone) ||
+                  (driver.driverId && appMap.get(driver.driverId)) || null;
+
+      const wallet = walletMap.get(driver._id.toString()) || null;
+      const walletBalance = wallet ? wallet.balance : 0;
+      const dueAmount = walletBalance < 0 ? Math.abs(walletBalance) : 0;
+      const dueLimit = getVehicleDueLimit(driver.vehicleType);
+      const isDueExceeded = dueAmount >= dueLimit;
+
+      const vStatus = driver.verificationStatus || app?.verificationStatus || (driver.isVerified ? 'verified' : 'pending');
+      const profileImage = app?.profilePhoto?.url || driver.profileImage || null;
+
+      let computedStatus = 'offline';
+      if (driver.isOnline) {
+        computedStatus = driver.isAvailable ? 'online' : 'busy';
+      }
+
+      return {
+        ...driver,
+        _id: driver._id,
+        id: driver._id,
+        status: computedStatus,
+        profileImage,
+        profileimage: profileImage,
+        verificationStatus: vStatus,
+        walletBalance,
+        dueAmount,
+        dueLimit,
+        isDueExceeded,
+        todayCollection: wallet?.todayCollection || 0,
+        weeklyCollection: wallet?.weeklyCollection || 0,
+        totalCollection: wallet?.totalCollection || 0,
+        totalEarnings: driver.totalEarnings || 0,
+        totalRides: driver.totalTrips || 0,
+        address: app?.address || null,
+        documents: {
+          license: !!(app?.drivingLicense?.url || driver.documents?.license),
+          rc: !!(app?.vehicleRC?.url || driver.documents?.rc),
+          aadhar: !!(app?.aadharCard?.front?.url || app?.aadharCard?.back?.url || driver.documents?.aadhar),
+          pan: !!(app?.panCard?.url || driver.documents?.pan)
+        }
+      };
+    });
+
+    // In-memory verification filter if specified
+    if (verificationStatus && verificationStatus !== 'all') {
+      enriched = enriched.filter(d => d.verificationStatus === verificationStatus);
+    }
+
+    // In-memory due filter if specified
+    if (dueStatus && dueStatus !== 'all') {
+      if (dueStatus === 'has_due') {
+        enriched = enriched.filter(d => d.dueAmount > 0);
+      } else if (dueStatus === 'over_limit') {
+        enriched = enriched.filter(d => d.isDueExceeded);
+      } else if (dueStatus === 'no_due') {
+        enriched = enriched.filter(d => d.dueAmount === 0);
+      }
+    }
+
+    // Sort enriched drivers
+    if (sortBy === 'earnings_desc') {
+      enriched.sort((a, b) => (b.totalEarnings || 0) - (a.totalEarnings || 0));
+    } else if (sortBy === 'due_desc') {
+      enriched.sort((a, b) => (b.dueAmount || 0) - (a.dueAmount || 0));
+    } else if (sortBy === 'trips_desc') {
+      enriched.sort((a, b) => (b.totalRides || 0) - (a.totalRides || 0));
+    } else if (sortBy === 'rating_desc') {
+      enriched.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+    } else if (sortBy === 'name_asc') {
+      enriched.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    } else {
+      enriched.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    }
+
+    // Global stats across all drivers in DB
+    const allDrivers = await Driver.find({}).lean();
+    const allWallets = await DriverWallet.find({}).lean();
+    const allAppVerifications = await DriverApplication.find({}).select('verificationStatus phone driverId').lean();
+
+    const appVerMap = new Map();
+    allAppVerifications.forEach(a => {
+      if (a.phone) appVerMap.set(a.phone, a.verificationStatus);
+      if (a.driverId) appVerMap.set(a.driverId, a.verificationStatus);
+    });
+
+    const wMap = new Map();
+    allWallets.forEach(w => {
+      if (w.driverId) wMap.set(w.driverId.toString(), w);
+    });
+
+    let statOnline = 0;
+    let statAvailable = 0;
+    let statBusy = 0;
+    let statOffline = 0;
+    let statVerified = 0;
+    let statPending = 0;
+    let statRejected = 0;
+    let statBlocked = 0;
+    let statWithDue = 0;
+    let statTotalDue = 0;
+    let statTotalEarnings = 0;
+
+    allDrivers.forEach(d => {
+      if (d.isOnline) {
+        statOnline++;
+        if (d.isAvailable) statAvailable++;
+        else statBusy++;
+      } else {
+        statOffline++;
+      }
+
+      if (d.isBlocked) statBlocked++;
+
+      const vStat = d.verificationStatus || appVerMap.get(d.phone) || appVerMap.get(d.driverId) || (d.isVerified ? 'verified' : 'pending');
+      if (vStat === 'verified') statVerified++;
+      else if (vStat === 'rejected') statRejected++;
+      else statPending++;
+
+      const w = wMap.get(d._id.toString());
+      const bal = w ? w.balance : 0;
+      if (bal < 0) {
+        statWithDue++;
+        statTotalDue += Math.abs(bal);
+      }
+      statTotalEarnings += (d.totalEarnings || 0);
+    });
+
+    const stats = {
+      total: allDrivers.length,
+      online: statOnline,
+      available: statAvailable,
+      busy: statBusy,
+      offline: statOffline,
+      verified: statVerified,
+      pending: statPending,
+      rejected: statRejected,
+      blocked: statBlocked,
+      driversWithDue: statWithDue,
+      totalDueAmount: Math.round(statTotalDue * 100) / 100,
+      totalEarnings: Math.round(statTotalEarnings * 100) / 100
+    };
+
+    // Apply pagination
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.max(1, parseInt(limit, 10) || 50);
+    const total = enriched.length;
+    const paginatedDrivers = enriched.slice((pageNum - 1) * limitNum, pageNum * limitNum);
 
     res.json({
       success: true,
-      data: drivers,
+      data: paginatedDrivers,
+      stats,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page: pageNum,
+        limit: limitNum,
         total,
-        pages: Math.ceil(total / limit)
+        pages: Math.ceil(total / limitNum) || 1
       }
     });
   } catch (error) {
@@ -288,16 +511,95 @@ export const getAllDrivers = async (req, res) => {
 // Get driver by ID (admin only)
 export const getDriverById = async (req, res) => {
   try {
-    const driver = await Driver.findById(req.params.id);
+    const driver = await Driver.findById(req.params.id).lean();
     if (!driver) {
       return res.status(404).json({
         success: false,
         message: 'Driver not found'
       });
     }
+
+    let application = null;
+    if (driver.applicationId) {
+      application = await DriverApplication.findById(driver.applicationId).lean();
+    }
+    if (!application && driver.phone) {
+      application = await DriverApplication.findOne({ phone: driver.phone }).lean();
+    }
+    if (!application && driver.driverId) {
+      application = await DriverApplication.findOne({ driverId: driver.driverId }).lean();
+    }
+
+    const wallet = await DriverWallet.findOne({ driverId: driver._id }).lean();
+    const walletBalance = wallet ? wallet.balance : 0;
+    const dueAmount = walletBalance < 0 ? Math.abs(walletBalance) : 0;
+
+    const dueLimits = { bike: 300, scooty: 300, scooter: 300, auto: 700, mini_3w: 700, e_loader: 700, car: 700, tata_ace: 700, pickup: 700, mini_truck: 700, truck: 700 };
+    const vTypeKey = (driver.vehicleType || 'bike').toLowerCase();
+    const dueLimit = dueLimits[vTypeKey] || 300;
+    const isDueExceeded = dueAmount >= dueLimit;
+
+    // Fetch recent 10 rides
+    const recentRides = await Ride.find({
+      $or: [
+        { 'driver.driverId': driver._id },
+        ...(driver.driverId ? [{ 'driver.driverId': driver.driverId }] : []),
+        ...(driver.phone ? [{ 'driver.phone': driver.phone }] : [])
+      ]
+    })
+      .sort({ requestedAt: -1, createdAt: -1 })
+      .limit(10)
+      .lean();
+
+    const verificationStatus = driver.verificationStatus || application?.verificationStatus || (driver.isVerified ? 'verified' : 'pending');
+    const profileImage = application?.profilePhoto?.url || driver.profileImage || null;
+
     res.json({
       success: true,
-      data: driver
+      data: {
+        ...driver,
+        _id: driver._id,
+        id: driver._id,
+        status: driver.isOnline ? (driver.isAvailable ? 'online' : 'busy') : 'offline',
+        profileImage,
+        verificationStatus,
+        walletBalance,
+        dueAmount,
+        dueLimit,
+        isDueExceeded,
+        wallet: wallet || {
+          balance: 0,
+          todayCollection: 0,
+          weeklyCollection: 0,
+          totalCollection: 0
+        },
+        application: application ? {
+          _id: application._id,
+          fullName: application.fullName,
+          phone: application.phone,
+          email: application.email,
+          address: application.address,
+          bankDetails: application.bankDetails,
+          profilePhoto: application.profilePhoto,
+          aadharCard: application.aadharCard,
+          drivingLicense: application.drivingLicense,
+          vehicleRC: application.vehicleRC,
+          panCard: application.panCard,
+          verificationStatus: application.verificationStatus
+        } : null,
+        recentTrips: recentRides.map(r => ({
+          id: r.rideId || r._id,
+          rideId: r.rideId || r._id,
+          date: r.requestedAt ? new Date(r.requestedAt).toLocaleDateString() : (r.createdAt ? new Date(r.createdAt).toLocaleDateString() : 'N/A'),
+          from: r.pickupLocation?.address || 'Pickup',
+          to: r.dropLocation?.address || 'Drop',
+          amount: r.fare?.finalAmount || r.fare?.total || 0,
+          driverEarning: r.fare?.driverEarning || 0,
+          status: r.status,
+          paymentMethod: r.paymentMethod,
+          paymentStatus: r.paymentStatus
+        }))
+      }
     });
   } catch (error) {
     console.error('Error in getDriverById:', error);
@@ -307,6 +609,179 @@ export const getDriverById = async (req, res) => {
     });
   }
 };
+
+// Get driver's full ride history (admin)
+export const getDriverRideHistoryForAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { page = 1, limit = 20, status, search, startDate, endDate } = req.query;
+
+    const driver = await Driver.findById(id).lean();
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
+      });
+    }
+
+    const query = {
+      $or: [
+        { 'driver.driverId': driver._id },
+        ...(driver.driverId ? [{ 'driver.driverId': driver.driverId }] : []),
+        ...(driver.phone ? [{ 'driver.phone': driver.phone }] : [])
+      ]
+    };
+
+    if (status && status !== 'all') {
+      if (status === 'active') {
+        query.status = { $in: ['requested', 'searching', 'driver_assigned', 'driver_arrived', 'in_progress'] };
+      } else if (status === 'completed') {
+        query.status = 'completed';
+      } else if (status === 'cancelled') {
+        query.status = { $in: ['cancelled', 'no_drivers'] };
+      } else {
+        query.status = status;
+      }
+    }
+
+    if (search && search.trim()) {
+      const sRegex = new RegExp(search.trim().replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'i');
+      query.$and = query.$and || [];
+      query.$and.push({
+        $or: [
+          { rideId: sRegex },
+          { 'customer.name': sRegex },
+          { 'customer.phone': sRegex },
+          { 'pickupLocation.address': sRegex },
+          { 'dropLocation.address': sRegex }
+        ]
+      });
+    }
+
+    if (startDate || endDate) {
+      const dateCondition = {};
+      if (startDate) {
+        const s = new Date(startDate);
+        s.setHours(0, 0, 0, 0);
+        dateCondition.$gte = s;
+      }
+      if (endDate) {
+        const e = new Date(endDate);
+        e.setHours(23, 59, 59, 999);
+        dateCondition.$lte = e;
+      }
+      query.requestedAt = dateCondition;
+    }
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+
+    const [rides, total, statsAggregation] = await Promise.all([
+      Ride.find(query)
+        .sort({ requestedAt: -1, createdAt: -1 })
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
+        .lean(),
+      Ride.countDocuments(query),
+      Ride.aggregate([
+        {
+          $match: {
+            $or: [
+              { 'driver.driverId': driver._id },
+              ...(driver.driverId ? [{ 'driver.driverId': driver.driverId }] : []),
+              ...(driver.phone ? [{ 'driver.phone': driver.phone }] : [])
+            ]
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalRides: { $sum: 1 },
+            completedRides: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+            cancelledRides: { $sum: { $cond: [{ $in: ['$status', ['cancelled', 'no_drivers']] }, 1, 0] } },
+            activeRides: { $sum: { $cond: [{ $in: ['$status', ['requested', 'searching', 'driver_assigned', 'driver_arrived', 'in_progress']] }, 1, 0] } },
+            totalFare: { $sum: '$fare.finalAmount' },
+            totalDriverEarnings: { $sum: '$fare.driverEarning' },
+            totalCommission: { $sum: '$fare.commissionAmount' },
+            cashCollections: {
+              $sum: {
+                $cond: [
+                  { $and: [{ $eq: ['$status', 'completed'] }, { $eq: ['$paymentMethod', 'cash'] }] },
+                  '$fare.finalAmount',
+                  0
+                ]
+              }
+            },
+            onlineEarnings: {
+              $sum: {
+                $cond: [
+                  { $and: [{ $eq: ['$status', 'completed'] }, { $ne: ['$paymentMethod', 'cash'] }] },
+                  '$fare.driverEarning',
+                  0
+                ]
+              }
+            }
+          }
+        }
+      ])
+    ]);
+
+    const stats = statsAggregation[0] || {
+      totalRides: 0,
+      completedRides: 0,
+      cancelledRides: 0,
+      activeRides: 0,
+      totalFare: 0,
+      totalDriverEarnings: 0,
+      totalCommission: 0,
+      cashCollections: 0,
+      onlineEarnings: 0
+    };
+
+    res.json({
+      success: true,
+      data: {
+        driver: {
+          id: driver._id,
+          name: driver.name,
+          phone: driver.phone,
+          vehicleType: driver.vehicleType,
+          vehicleNumber: driver.vehicleNumber,
+          rating: driver.rating
+        },
+        rides: rides.map(r => ({
+          ...r,
+          id: r._id,
+          rideId: r.rideId || r._id.toString(),
+          date: r.requestedAt || r.createdAt,
+          distanceText: r.routeInfo?.distanceText || `${r.distance || 0} km`,
+          durationText: r.routeInfo?.durationText || `${r.duration || 0} mins`,
+          fareFinal: r.fare?.finalAmount || r.fare?.total || 0,
+          driverEarning: r.fare?.driverEarning || 0,
+          commission: r.fare?.commissionAmount || 0,
+          pickupAddress: r.pickupLocation?.address || 'Pickup location',
+          dropAddress: r.dropLocation?.address || (r.dropLocations?.[0]?.address) || 'Drop location',
+          customerName: r.customer?.name || 'Customer',
+          customerPhone: r.customer?.phone || 'N/A'
+        })),
+        stats,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum) || 1
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error in getDriverRideHistoryForAdmin:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to fetch driver rides'
+    });
+  }
+};
+
 
 // Create driver (admin only)
 export const createDriver = async (req, res) => {
@@ -715,10 +1190,19 @@ export const toggleBlockDriver = async (req, res) => {
       });
     }
 
-    driver.isBlocked = !driver.isBlocked;
+    const { isBlocked, reason } = req.body || {};
+    if (typeof isBlocked === 'boolean') {
+      driver.isBlocked = isBlocked;
+    } else {
+      driver.isBlocked = !driver.isBlocked;
+    }
+
     if (driver.isBlocked) {
       driver.isOnline = false;
       driver.isAvailable = false;
+      driver.blockReason = reason || 'Blocked by administrator';
+    } else {
+      driver.blockReason = null;
     }
     await driver.save();
 
@@ -727,6 +1211,7 @@ export const toggleBlockDriver = async (req, res) => {
       io.emit('driver:block-status-changed', {
         driverId: driver._id,
         isBlocked: driver.isBlocked,
+        reason: driver.blockReason,
         timestamp: new Date()
       });
     }

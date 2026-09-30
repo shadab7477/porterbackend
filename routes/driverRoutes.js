@@ -2,6 +2,7 @@ import express from 'express';
 import {
   getAllDrivers,
   getDriverById,
+  getDriverRideHistoryForAdmin,
   createDriver,
   updateDriver,
   deleteDriver,
@@ -21,10 +22,10 @@ const router = express.Router();
 
 router.use(authMiddleware);
 
-
 router.get('/', getAllDrivers);
 router.get('/available', getAvailableDrivers);
 router.get('/pending-verification', getPendingVerifications);
+router.get('/:id/rides', getDriverRideHistoryForAdmin);
 router.get('/:id', getDriverById);
 router.post('/', createDriver);
 router.put('/:id', updateDriver);
