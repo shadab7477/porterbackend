@@ -14,7 +14,9 @@ import {
   getPendingVerifications,
   toggleBlockDriver,
   updateDriverDocuments,
-  toggleDriverActive
+  toggleDriverActive,
+  getDriverTransactionsForAdmin,
+  adjustDriverWalletForAdmin
 } from '../controllers/driverController.js';
 import { authMiddleware } from '../middleware/authMiddleware.js';
 
@@ -26,6 +28,8 @@ router.get('/', getAllDrivers);
 router.get('/available', getAvailableDrivers);
 router.get('/pending-verification', getPendingVerifications);
 router.get('/:id/rides', getDriverRideHistoryForAdmin);
+router.get('/:id/transactions', getDriverTransactionsForAdmin);
+router.post('/:id/wallet-adjust', adjustDriverWalletForAdmin);
 router.get('/:id', getDriverById);
 router.post('/', createDriver);
 router.put('/:id', updateDriver);

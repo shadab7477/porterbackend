@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import Driver from '../models/Driver.js';
 import DriverApplication from '../models/DriverApplication.js';
 import DriverWallet from '../models/DriverWallet.js';
+import DriverWalletTransaction from '../models/DriverWalletTransaction.js';
 import Ride from '../models/Ride.js';
 
 // ==================== DRIVER SELF-SERVICE FUNCTIONS ====================
@@ -1522,3 +1523,274 @@ async function findNearbyCustomers(latitude, longitude, radius) {
     return [];
   }
 };
+
+// Get driver wallet & payment transactions (Admin)
+export const getDriverTransactionsForAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      page = 1,
+      limit = 20,
+      category,
+      type,
+      status,
+      search,
+      sortBy = 'newest'
+    } = req.query;
+
+    let driver = null;
+    if (mongoose.isValidObjectId(id)) {
+      driver = await Driver.findById(id).lean();
+    }
+    if (!driver) {
+      driver = await Driver.findOne({
+        $or: [{ driverId: id }, { phone: id }]
+      }).lean();
+    }
+
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found'
+      });
+    }
+
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = parseInt(limit, 10) || 20;
+    const skip = (pageNum - 1) * limitNum;
+
+    // Base query for driver wallet transactions
+    const query = { driverId: driver._id };
+
+    // Category filter
+    if (category && category !== 'all') {
+      if (category === 'recharge' || category === 'wallet_recharge') {
+        query.transactionCategory = 'wallet_recharge';
+      } else if (category === 'withdrawal') {
+        query.transactionCategory = 'withdrawal';
+      } else if (category === 'commission' || category === 'commission_due') {
+        query.transactionCategory = 'commission_due';
+      } else if (category === 'adjustment') {
+        query.transactionCategory = { $in: ['manual_adjustment', 'bonus', 'incentive', 'penalty', 'refund', 'other'] };
+      } else {
+        query.transactionCategory = category;
+      }
+    }
+
+    // Type filter
+    if (type && type !== 'all') {
+      query.type = type;
+    }
+
+    // Status filter
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+
+    // Search filter
+    if (search && search.trim()) {
+      const searchRegex = new RegExp(search.trim(), 'i');
+      query.$or = [
+        { transactionId: searchRegex },
+        { description: searchRegex },
+        { 'payoutDetails.accountHolderName': searchRegex },
+        { 'payoutDetails.bankAccountLast4': searchRegex },
+        { 'payoutDetails.razorpayPayoutId': searchRegex }
+      ];
+    }
+
+    // Sort order
+    let sortOption = { createdAt: -1 };
+    if (sortBy === 'oldest') sortOption = { createdAt: 1 };
+    else if (sortBy === 'amount_high') sortOption = { amount: -1 };
+    else if (sortBy === 'amount_low') sortOption = { amount: 1 };
+
+    // Fetch transactions with ride populated
+    const [transactions, total, allDriverTransactions, wallet] = await Promise.all([
+      DriverWalletTransaction.find(query)
+        .populate('orderId', 'rideId pickupLocation dropLocation fare status paymentMethod')
+        .sort(sortOption)
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      DriverWalletTransaction.countDocuments(query),
+      DriverWalletTransaction.find({ driverId: driver._id }).lean(),
+      DriverWallet.findOne({ driverId: driver._id }).lean()
+    ]);
+
+    // Calculate rich statistical summary
+    let totalRecharge = 0;
+    let totalWithdrawal = 0;
+    let pendingWithdrawal = 0;
+    let totalCommission = 0;
+    let totalBonus = 0;
+    let totalAdjustments = 0;
+    let successfulTransactionsCount = 0;
+
+    allDriverTransactions.forEach((t) => {
+      const absAmount = Math.abs(t.amount || 0);
+      if (t.transactionCategory === 'wallet_recharge' && (t.status === 'completed' || t.status === 'success')) {
+        totalRecharge += absAmount;
+      }
+      if (t.transactionCategory === 'withdrawal') {
+        if (t.status === 'completed' || t.status === 'paid' || t.status === 'approved') {
+          totalWithdrawal += absAmount;
+        } else if (t.status === 'pending' || t.status === 'processing') {
+          pendingWithdrawal += absAmount;
+        }
+      }
+      if (t.transactionCategory === 'commission_due') {
+        totalCommission += absAmount;
+      }
+      if (t.transactionCategory === 'bonus' || t.transactionCategory === 'incentive') {
+        totalBonus += absAmount;
+      }
+      if (t.transactionCategory === 'manual_adjustment') {
+        totalAdjustments += (t.type === 'credit' ? absAmount : -absAmount);
+      }
+      if (t.status === 'completed' || t.status === 'success') {
+        successfulTransactionsCount++;
+      }
+    });
+
+    const currentBalance = wallet ? (wallet.balance || 0) : 0;
+    const dueAmount = currentBalance < 0 ? Math.abs(currentBalance) : 0;
+
+    res.json({
+      success: true,
+      data: {
+        transactions: transactions.map(t => ({
+          _id: t._id,
+          id: t._id,
+          amount: t.amount,
+          type: t.type,
+          category: t.transactionCategory || 'other',
+          previousBalance: t.previousBalance,
+          newBalance: t.newBalance,
+          status: t.status,
+          description: t.description,
+          transactionId: t.transactionId,
+          orderId: t.orderId?._id,
+          ride: t.orderId ? {
+            rideId: t.orderId.rideId,
+            fare: t.orderId.fare?.finalAmount || t.orderId.fare?.total || 0,
+            status: t.orderId.status,
+            pickup: t.orderId.pickupLocation?.address,
+            drop: t.orderId.dropLocation?.address
+          } : null,
+          payoutDetails: t.payoutDetails || null,
+          createdAt: t.createdAt,
+          updatedAt: t.updatedAt
+        })),
+        stats: {
+          walletBalance: currentBalance,
+          dueAmount,
+          totalRecharge,
+          totalWithdrawal,
+          pendingWithdrawal,
+          totalCommission,
+          totalBonus,
+          totalAdjustments,
+          totalTransactions: allDriverTransactions.length,
+          successfulTransactionsCount
+        },
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error in getDriverTransactionsForAdmin:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to fetch driver transactions'
+    });
+  }
+};
+
+// Manual wallet adjustment / recharge for a driver (Admin)
+export const adjustDriverWalletForAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, type, category = 'manual_adjustment', reason } = req.body;
+
+    if (!amount || isNaN(amount) || Number(amount) <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid positive amount is required' });
+    }
+
+    if (!['credit', 'debit'].includes(type)) {
+      return res.status(400).json({ success: false, message: 'Type must be credit or debit' });
+    }
+
+    let driver = null;
+    if (mongoose.isValidObjectId(id)) {
+      driver = await Driver.findById(id);
+    }
+    if (!driver) {
+      driver = await Driver.findOne({
+        $or: [{ driverId: id }, { phone: id }]
+      });
+    }
+
+    if (!driver) {
+      return res.status(404).json({ success: false, message: 'Driver not found' });
+    }
+
+    let wallet = await DriverWallet.findOne({ driverId: driver._id });
+    if (!wallet) {
+      wallet = await DriverWallet.create({ driverId: driver._id, balance: 0 });
+    }
+
+    const parsedAmount = Math.abs(Number(amount));
+    const previousBalance = wallet.balance || 0;
+    let newBalance = previousBalance;
+
+    if (type === 'credit') {
+      newBalance = previousBalance + parsedAmount;
+    } else {
+      newBalance = previousBalance - parsedAmount;
+    }
+
+    wallet.balance = newBalance;
+    await wallet.save();
+
+    const txnAmount = type === 'credit' ? parsedAmount : -parsedAmount;
+    const txnId = `ADJ_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const transaction = await DriverWalletTransaction.create({
+      driverId: driver._id,
+      amount: txnAmount,
+      type,
+      transactionCategory: category || 'manual_adjustment',
+      previousBalance,
+      newBalance,
+      description: reason || `Admin wallet adjustment (${type === 'credit' ? 'Credit/Recharge' : 'Debit/Deduction'})`,
+      transactionId: txnId,
+      status: 'completed',
+      payoutDetails: {
+        approvedAt: new Date(),
+        approvedBy: req.adminId,
+        purpose: reason || 'Admin wallet adjustment'
+      }
+    });
+
+    res.json({
+      success: true,
+      message: `Successfully ${type === 'credit' ? 'credited ₹' + parsedAmount : 'debited ₹' + parsedAmount} ${type === 'credit' ? 'to' : 'from'} driver wallet`,
+      data: {
+        wallet: {
+          balance: wallet.balance,
+          previousBalance
+        },
+        transaction
+      }
+    });
+  } catch (error) {
+    console.error('Error in adjustDriverWalletForAdmin:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to adjust driver wallet' });
+  }
+};
+
