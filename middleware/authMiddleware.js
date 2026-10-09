@@ -15,8 +15,13 @@ export const authMiddleware = (req, res, next) => {
     
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
-    // FIX: Store the appropriate ID based on token type
-    if (decoded.role === 'admin' || decoded.role === 'admin_auth') {
+    // Store the appropriate ID based on token type
+    if (
+      decoded.role === 'admin' || 
+      decoded.role === 'super_admin' || 
+      decoded.role === 'admin_auth' || 
+      (typeof decoded.role === 'string' && decoded.role.includes('admin'))
+    ) {
       req.adminId = decoded.id;
       req.adminRole = decoded.role;
       console.log('🔐 Admin authenticated:', { adminId: req.adminId, role: decoded.role });
@@ -32,7 +37,7 @@ export const authMiddleware = (req, res, next) => {
     else {
       // Default - store as adminId for backward compatibility
       req.adminId = decoded.id;
-      req.adminRole = decoded.role;
+      req.adminRole = decoded.role || 'admin';
       console.log('🔐 User authenticated:', { id: req.adminId, role: decoded.role });
     }
     
@@ -60,7 +65,12 @@ export const optionalAuthMiddleware = (req, res, next) => {
     if (token) {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       
-      if (decoded.role === 'admin' || decoded.role === 'admin_auth') {
+      if (
+        decoded.role === 'admin' || 
+        decoded.role === 'super_admin' || 
+        decoded.role === 'admin_auth' || 
+        (typeof decoded.role === 'string' && decoded.role.includes('admin'))
+      ) {
         req.adminId = decoded.id;
         req.adminRole = decoded.role;
       } 
@@ -69,6 +79,10 @@ export const optionalAuthMiddleware = (req, res, next) => {
       }
       else if (decoded.role === 'customer' || decoded.role === 'customer_auth') {
         req.customerId = decoded.id;
+      }
+      else {
+        req.adminId = decoded.id;
+        req.adminRole = decoded.role || 'admin';
       }
     }
     

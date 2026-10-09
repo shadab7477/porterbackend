@@ -7,7 +7,10 @@ export const initializeSupportSockets = (io) => {
   // Socket middleware for authentication (optional for public, but decodes if token provided)
   supportNamespace.use((socket, next) => {
     try {
-      const token = socket.handshake.auth?.token || socket.handshake.headers?.authorization?.split(' ')[1];
+      const token = 
+        socket.handshake.auth?.token || 
+        socket.handshake.query?.token || 
+        socket.handshake.headers?.authorization?.split(' ')[1];
       if (token) {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         socket.user = decoded;
@@ -25,15 +28,21 @@ export const initializeSupportSockets = (io) => {
     // Join ticket room
     socket.on('join-ticket', (ticketId) => {
       if (!ticketId) return;
-      socket.join(`ticket-${ticketId}`);
-      console.log(`Socket ${socket.id} joined ticket-${ticketId}`);
+      const tid = typeof ticketId === 'object' ? (ticketId.ticketId || ticketId._id || ticketId.id) : ticketId;
+      if (tid) {
+        socket.join(`ticket-${tid}`);
+        console.log(`Socket ${socket.id} joined ticket-${tid}`);
+      }
     });
 
     // Leave ticket room
     socket.on('leave-ticket', (ticketId) => {
       if (!ticketId) return;
-      socket.leave(`ticket-${ticketId}`);
-      console.log(`Socket ${socket.id} left ticket-${ticketId}`);
+      const tid = typeof ticketId === 'object' ? (ticketId.ticketId || ticketId._id || ticketId.id) : ticketId;
+      if (tid) {
+        socket.leave(`ticket-${tid}`);
+        console.log(`Socket ${socket.id} left ticket-${tid}`);
+      }
     });
 
     // Join admin room for real-time ticket alerts (only for admins)

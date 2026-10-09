@@ -491,8 +491,8 @@ export const addMessage = async (req, res) => {
     ticket.addAuditLog({
       action: isInternalNote ? 'internal_note_added' : 'public_reply_added',
       actor: senderId,
-      actorModel,
-      actorName,
+      actorModel: senderModel,
+      actorName: senderName,
       actorRole: authUser?.role || senderType.toLowerCase(),
       details: {
         messageSnippet: message.substring(0, 80),
@@ -505,8 +505,9 @@ export const addMessage = async (req, res) => {
 
     // Emit real-time events with strict room separation
     const socketPayload = {
-      ticketId: ticket.ticketId,
-      id: ticket._id,
+      ticketId: ticket._id.toString(),
+      ticketCode: ticket.ticketId,
+      id: ticket._id.toString(),
       message: newMessage
     };
 
@@ -514,9 +515,12 @@ export const addMessage = async (req, res) => {
       // Emit strictly to admin room!
       emitSupportEvent(req, 'ticket:internal-note', socketPayload, 'admin-room');
     } else {
-      // Emit to ticket room and admin room
+      // Emit to ticket rooms and admin room
       emitSupportEvent(req, 'ticket:message', socketPayload, `ticket-${ticket._id}`);
       emitSupportEvent(req, 'ticket:message', socketPayload, `ticket-${ticket.ticketId}`);
+      emitSupportEvent(req, 'new-message', socketPayload, `ticket-${ticket._id}`);
+      emitSupportEvent(req, 'new-message', socketPayload, `ticket-${ticket.ticketId}`);
+      emitSupportEvent(req, 'new-message', socketPayload, 'admin-room');
       emitSupportEvent(req, 'new-message', socketPayload);
     }
 
@@ -970,7 +974,7 @@ export const updateTicketStatus = async (req, res) => {
       action: 'status_changed',
       actor: req.adminId,
       actorModel: 'Admin',
-      actorName: req.admin.name || req.admin.username,
+      actorName: req.admin?.name || req.admin?.username || 'Admin',
       actorRole: req.adminRole || 'admin',
       details: {
         previousStatus: oldStatus,
@@ -984,7 +988,7 @@ export const updateTicketStatus = async (req, res) => {
     emitSupportEvent(req, 'ticket:status-changed', {
       ticketId: ticket.ticketId,
       status: targetStatus,
-      updatedBy: req.admin.username,
+      updatedBy: req.admin?.username || req.admin?.name || 'Admin',
       resolutionNotes: ticket.resolutionNotes
     }, `ticket-${ticket._id}`);
 
@@ -1044,7 +1048,7 @@ export const assignTicket = async (req, res) => {
       action: 'ticket_assigned',
       actor: req.adminId,
       actorModel: 'Admin',
-      actorName: req.admin.name || req.admin.username,
+      actorName: req.admin?.name || req.admin?.username || 'Admin',
       actorRole: req.adminRole || 'admin',
       details: {
         previousAssignee: prevAssignee,
@@ -1057,7 +1061,7 @@ export const assignTicket = async (req, res) => {
     emitSupportEvent(req, 'ticket:assigned', {
       ticketId: ticket.ticketId,
       assignedTo: ticket.assignedToName,
-      assignedBy: req.admin.username
+      assignedBy: req.admin?.username || req.admin?.name || 'Admin'
     }, 'admin-room');
 
     res.status(200).json({
@@ -1107,7 +1111,7 @@ export const updatePriority = async (req, res) => {
       action: 'priority_changed',
       actor: req.adminId,
       actorModel: 'Admin',
-      actorName: req.admin.name || req.admin.username,
+      actorName: req.admin?.name || req.admin?.username || 'Admin',
       actorRole: req.adminRole || 'admin',
       details: { previousPriority: prevPriority, newPriority: priority }
     });
@@ -1160,7 +1164,7 @@ export const escalateTicket = async (req, res) => {
     ticket.messages.push({
       sender: req.adminId,
       senderModel: 'Admin',
-      senderName: req.admin.name || req.admin.username,
+      senderName: req.admin?.name || req.admin?.username || 'Admin',
       senderType: 'ADMIN',
       message: `[ESCALATION] Ticket escalated to Super Admin. Reason: ${reason}`,
       isInternal: true,
@@ -1171,7 +1175,7 @@ export const escalateTicket = async (req, res) => {
       action: 'ticket_escalated',
       actor: req.adminId,
       actorModel: 'Admin',
-      actorName: req.admin.name || req.admin.username,
+      actorName: req.admin?.name || req.admin?.username || 'Admin',
       actorRole: req.adminRole || 'admin',
       details: { reason, escalatedTo: superAdmin?.username || 'Super Admin' },
       isInternal: true
@@ -1182,7 +1186,7 @@ export const escalateTicket = async (req, res) => {
     emitSupportEvent(req, 'ticket:escalated', {
       ticketId: ticket.ticketId,
       reason,
-      escalatedBy: req.admin.username
+      escalatedBy: req.admin?.username || req.admin?.name || 'Admin'
     }, 'admin-room');
 
     res.status(200).json({
