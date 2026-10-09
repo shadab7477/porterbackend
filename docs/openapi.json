@@ -1,0 +1,236 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "GoDelivo Backend API Specification",
+    "description": "Comprehensive RESTful API and WebSocket Event Specification for GoDelivo Logistics Platform, covering Authentication, Rides, Fare Calculation, Waiting Charges, Support & Complaint Box, Wallets, Driver Settlement, and Admin Management.",
+    "version": "2.0.0",
+    "contact": {
+      "name": "GoDelivo Engineering Team",
+      "email": "support@godelivo.com"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://godelivo.com",
+      "description": "Production Server"
+    },
+    {
+      "url": "http://localhost:5001",
+      "description": "Local Development Server"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT authentication token passed in the Authorization header: Bearer <token>"
+      }
+    },
+    "schemas": {
+      "StandardResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "message": { "type": "string" },
+          "data": { "type": "object" }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean", "example": false },
+          "message": { "type": "string" },
+          "error": { "type": "string" }
+        }
+      },
+      "Ticket": {
+        "type": "object",
+        "properties": {
+          "ticketId": { "type": "string", "example": "TKT-2610-0042" },
+          "type": { "type": "string", "enum": ["complaint", "support_request"], "example": "complaint" },
+          "category": { "type": "string", "example": "Loading/unloading or waiting charges" },
+          "subject": { "type": "string", "example": "Disputed destination waiting charge" },
+          "description": { "type": "string", "example": "Unloading took 15 minutes, but waiting charge was added." },
+          "relatedRideId": { "type": "string", "example": "651234567890abcdef123456" },
+          "relatedRideCode": { "type": "string", "example": "RID12345678" },
+          "status": { "type": "string", "enum": ["open", "assigned", "in_progress", "waiting_for_user", "resolved", "closed"], "example": "open" },
+          "priority": { "type": "string", "enum": ["Critical", "High", "Medium", "Low"], "example": "Medium" },
+          "reporterName": { "type": "string", "example": "Rahul Sharma" },
+          "reporterType": { "type": "string", "enum": ["CUSTOMER", "DRIVER", "ADMIN"], "example": "CUSTOMER" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "CreateTicketRequest": {
+        "type": "object",
+        "required": ["category", "subject", "description"],
+        "properties": {
+          "type": { "type": "string", "enum": ["complaint", "support_request"], "default": "support_request" },
+          "category": { "type": "string", "example": "Driver behavior" },
+          "subject": { "type": "string", "example": "Driver did not arrive on time" },
+          "description": { "type": "string", "example": "Driver was delayed by 40 minutes at pickup location." },
+          "relatedRideId": { "type": "string", "example": "RID12345678" },
+          "priority": { "type": "string", "enum": ["Critical", "High", "Medium", "Low"], "default": "Medium" }
+        }
+      },
+      "AddMessageRequest": {
+        "type": "object",
+        "required": ["message"],
+        "properties": {
+          "message": { "type": "string", "example": "Here is additional info requested." },
+          "isInternal": { "type": "boolean", "default": false, "description": "Admin only: Private internal note" }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/api/support/categories": {
+      "get": {
+        "summary": "Fetch support and complaint categories",
+        "description": "Returns configured list of complaint and support request categories for customers and drivers.",
+        "responses": {
+          "200": {
+            "description": "Categories fetched successfully",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/StandardResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/support/config": {
+      "get": {
+        "summary": "Fetch support configuration and SLA rules",
+        "responses": {
+          "200": {
+            "description": "Configuration fetched successfully",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/StandardResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/support/tickets": {
+      "post": {
+        "summary": "Create a support ticket or complaint",
+        "security": [{ "BearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateTicketRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Ticket created successfully",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/StandardResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error"
+          }
+        }
+      },
+      "get": {
+        "summary": "List all tickets (Admin only)",
+        "security": [{ "BearerAuth": [] }],
+        "responses": {
+          "200": { "description": "Tickets list" }
+        }
+      }
+    },
+    "/api/support/tickets/my": {
+      "get": {
+        "summary": "List tickets for authenticated user",
+        "security": [{ "BearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "User tickets retrieved",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/StandardResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/support/tickets/{id}": {
+      "get": {
+        "summary": "Get ticket details by ID",
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Ticket details (Internal notes stripped for non-admin)" },
+          "404": { "description": "Ticket not found" }
+        }
+      }
+    },
+    "/api/support/tickets/{id}/messages": {
+      "post": {
+        "summary": "Add message or reply to ticket",
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AddMessageRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Message added" }
+        }
+      }
+    },
+    "/api/support/tickets/{id}/status": {
+      "put": {
+        "summary": "Update ticket status (Admin only)",
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Status updated successfully" }
+        }
+      }
+    },
+    "/api/support/tickets/{id}/related-ride": {
+      "get": {
+        "summary": "Get related ride fare breakdown, waiting charge calculation, and payment records",
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Related ride audit details" }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Health check endpoint",
+        "responses": {
+          "200": { "description": "Service is healthy" }
+        }
+      }
+    }
+  }
+}

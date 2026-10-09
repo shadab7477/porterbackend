@@ -65,16 +65,18 @@ adminSchema.methods.comparePassword = async function(candidatePassword) {
 // Static method to initialize default admin
 adminSchema.statics.initializeDefaultAdmin = async function() {
   try {
-    const adminCount = await this.countDocuments();
-    if (adminCount === 0) {
-      await this.create({
-        username: 'admin',
-        password: 'admin123',
-        role: 'super_admin',
-        name: 'Administrator',
-        email: 'admin@logistics.com'
-      });
-      console.log('✅ Default admin created: admin/admin123');
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      const adminCount = await this.countDocuments();
+      if (adminCount === 0) {
+        await this.create({
+          username: 'admin',
+          password: 'admin123',
+          role: 'super_admin',
+          name: 'Administrator',
+          email: 'admin@logistics.com'
+        });
+        console.log('✅ Default admin created: admin/admin123');
+      }
     }
   } catch (error) {
     console.error('Error initializing default admin:', error);

@@ -332,11 +332,12 @@ export const calculateFare = async (req, res) => {
           baseFare: vBaseFare,
           pricePerKm: vRatePerKm,
           subtotal: Math.round(vSubtotal * 100) / 100,
+          platformFee: 1,
           discountAmount: Math.round(vDiscountAmount * 100) / 100,
           discountPercentage: vDiscountPercentage,
           distanceCharge: Math.round(vTotal * 100) / 100
         },
-        total: Math.round(vTotal * 100) / 100
+        total: Math.round((vTotal + 1) * 100) / 100
       };
     });
 
@@ -345,18 +346,19 @@ export const calculateFare = async (req, res) => {
       data: {
         vehicleType: vehicle.vehicleType,
         name: vehicle.name,
-        mainPricePerKm: vehicle.mainPricePerKm,   // NEW (optional)
+        mainPricePerKm: vehicle.mainPricePerKm,
         breakdown: {
           distance: distanceInKm,
           baseFare: baseFare,
           pricePerKm: ratePerKm,
           subtotal: Math.round(subtotal * 100) / 100,
+          platformFee: 1,
           discountAmount: Math.round(discountAmount * 100) / 100,
           discountPercentage,
           distanceCharge: Math.round(total * 100) / 100
         },
-        total: Math.round(total * 100) / 100,
-        vehicleOptions // NEW: Array containing calculated fares for all vehicles
+        total: Math.round((total + 1) * 100) / 100,
+        vehicleOptions // Array containing calculated fares for all vehicles
       }
     });
   } catch (error) {

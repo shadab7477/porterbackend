@@ -5,6 +5,7 @@ import ChatMessage from '../models/ChatMessage.js';
 import Notification from '../models/Notification.js';
 import { sendNotification } from '../utils/notificationService.js';
 import { logSocketFlow } from '../utils/rideLogger.js';
+import { applyWaitingChargeToRide } from '../utils/waitingChargeCalculator.js';
 
 // Store active tracking sessions
 const activeTrackingSessions = new Map(); // rideId -> session object
@@ -581,8 +582,12 @@ export const initializeRideTrackingSockets = (io) => {
               });
 
               ride.nearDestination = true;
+              if (!ride.destinationArrivedAt) {
+                ride.destinationArrivedAt = new Date();
+              }
+              applyWaitingChargeToRide(ride);
               await ride.save();
-              logWithTimestamp('debug', `Updated ride nearDestination flag`, { rideId });
+              logWithTimestamp('debug', `Updated ride nearDestination flag & waiting charges`, { rideId });
 
               // Notify customer they're near destination
               const session = activeTrackingSessions.get(rideId);
@@ -590,6 +595,8 @@ export const initializeRideTrackingSockets = (io) => {
                 io.to(session.customerSocketId).emit('ride:near-destination', {
                   rideId,
                   remainingDistance: distanceToDrop * 1000,
+                  destinationArrivedAt: ride.destinationArrivedAt,
+                  waitingChargeDetails: ride.waitingChargeDetails,
                   message: 'You are near your destination'
                 });
                 logWithTimestamp('debug', `Sent near-destination notification to customer`, {
@@ -853,15 +860,24 @@ export const initializeRideTrackingSockets = (io) => {
             logWithTimestamp('info', `Driver assigned to ride`, { rideId, driverId });
             break;
           case 'driver_arrived':
-            ride.driverArrivedAt = new Date();
+            if (!ride.driverArrivedAt) {
+              ride.driverArrivedAt = new Date();
+            }
+            applyWaitingChargeToRide(ride);
             logWithTimestamp('info', `Driver arrived at pickup`, { rideId, driverId });
             break;
           case 'in_progress':
             ride.rideStartedAt = new Date();
+            ride.pickupDepartureAt = new Date();
+            applyWaitingChargeToRide(ride);
             logWithTimestamp('info', `Ride started`, { rideId, driverId });
             break;
           case 'completed':
             ride.rideCompletedAt = new Date();
+            if (!ride.destinationArrivedAt && ride.nearDestination) {
+              ride.destinationArrivedAt = ride.destinationArrivedAt || new Date();
+            }
+            applyWaitingChargeToRide(ride);
             logWithTimestamp('info', `Ride completed`, { rideId, driverId });
             break;
           case 'cancelled':
@@ -880,6 +896,8 @@ export const initializeRideTrackingSockets = (io) => {
           driverId,
           location,
           timestamp: new Date(),
+          waitingChargeDetails: ride.waitingChargeDetails || null,
+          fare: ride.fare,
           message: getStatusMessage(status)
         };
 
@@ -910,6 +928,7 @@ export const initializeRideTrackingSockets = (io) => {
             rideId,
             message: 'Ride completed successfully',
             fare: ride.fare,
+            waitingChargeDetails: ride.waitingChargeDetails,
             timestamp: new Date()
           };
           io.to(`ride:${rideId}`).emit('ride:completed', completionData);

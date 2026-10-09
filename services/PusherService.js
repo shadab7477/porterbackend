@@ -237,12 +237,16 @@ class PusherService {
 
           if (distanceToDrop <= 0.1 && !ride.nearDestination) {
             ride.nearDestination = true;
+            if (!ride.destinationArrivedAt) {
+              ride.destinationArrivedAt = new Date();
+            }
             await ride.save();
             
             if (session?.customerId) {
               await this.triggerEvent(channelName, 'ride:near-destination', {
                 rideId,
                 message: 'You are near your destination',
+                destinationArrivedAt: ride.destinationArrivedAt,
                 remainingDistance: distanceToDrop * 1000
               });
             }

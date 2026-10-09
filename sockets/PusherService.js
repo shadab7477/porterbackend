@@ -216,6 +216,9 @@ class PusherService {
           // Check if near destination (within 100m)
           if (distanceToDrop <= 0.1 && !ride.nearDestination) {
             ride.nearDestination = true;
+            if (!ride.destinationArrivedAt) {
+              ride.destinationArrivedAt = new Date();
+            }
             await ride.save();
             
             // Notify customer
@@ -223,6 +226,7 @@ class PusherService {
               await this.pusher.trigger(channelName, 'ride:near-destination', {
                 rideId,
                 message: 'You are near your destination',
+                destinationArrivedAt: ride.destinationArrivedAt,
                 remainingDistance: distanceToDrop * 1000
               });
             }

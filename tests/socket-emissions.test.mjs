@@ -110,7 +110,13 @@ jest.unstable_mockModule('../models/Customer.js', () => ({
   }
 }));
 
-jest.unstable_mockModule('../models/WalletTransaction.js', () => ({
+jest.unstable_mockModule('../models/CustomerWalletTransaction.js', () => ({
+  default: {
+    create: jest.fn().mockResolvedValue({})
+  }
+}));
+
+jest.unstable_mockModule('../models/DriverWalletTransaction.js', () => ({
   default: {
     create: jest.fn().mockResolvedValue({})
   }

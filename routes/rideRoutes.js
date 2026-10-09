@@ -5,6 +5,7 @@ import {
   acceptRide,
   rejectRide,
   driverArrived,
+  driverArrivedDestination,
   startRide,
   completeRide,
   cancelRide,
@@ -231,6 +232,8 @@ router.post('/update-location', driverAuthMiddleware, updateDriverLocation);
 router.post('/accept', driverAuthMiddleware, acceptRide);
 router.post('/reject', driverAuthMiddleware, rejectRide);
 router.post('/arrived', driverAuthMiddleware, driverArrived);
+router.post('/arrived-destination', driverAuthMiddleware, driverArrivedDestination);
+router.post('/:rideId/arrived-destination', driverAuthMiddleware, driverArrivedDestination);
 router.post('/start', driverAuthMiddleware, startRide);
 router.post('/complete', driverAuthMiddleware, completeRide);
 router.post('/location', driverAuthMiddleware, updateRideLocation);

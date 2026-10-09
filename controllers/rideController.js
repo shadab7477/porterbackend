@@ -11,25 +11,35 @@ import Vehicle from '../models/Vehicle.js';
 import axios from 'axios';
 import jwt from 'jsonwebtoken';
 import { logRideFlow } from '../utils/rideLogger.js';
+import { calculateWaitingCharge, applyWaitingChargeToRide, getVehicleWaitingRule } from '../utils/waitingChargeCalculator.js';
+import PRICING_CONFIG from '../config/pricingConfig.js';
 
 // Google Maps API configuration
 const GOOGLE_MAPS_API_KEY = "AIzaSyCgpFAvw-8Q8nHEHz4z5ztx449xZLkilyk";
 const GOOGLE_MAPS_API_URL = "https://maps.googleapis.com/maps/api";
 
 const getOrCreateCustomerWallet = async (customerId) => {
-    let wallet = await CustomerWallet.findOne({ customerId });
-    if (!wallet) {
-        wallet = await CustomerWallet.create({ customerId, balance: 0 });
+    try {
+        let wallet = await CustomerWallet.findOne({ customerId });
+        if (!wallet) {
+            wallet = await CustomerWallet.create({ customerId, balance: 0 });
+        }
+        return wallet;
+    } catch (err) {
+        return null;
     }
-    return wallet;
 };
 
 const getOrCreateDriverWallet = async (driverId) => {
-    let wallet = await DriverWallet.findOne({ driverId });
-    if (!wallet) {
-        wallet = await DriverWallet.create({ driverId, balance: 0 });
+    try {
+        let wallet = await DriverWallet.findOne({ driverId });
+        if (!wallet) {
+            wallet = await DriverWallet.create({ driverId, balance: 0 });
+        }
+        return wallet;
+    } catch (err) {
+        return null;
     }
-    return wallet;
 };
 
 const getDriverProfilePayload = async (driverData) => {
@@ -317,6 +327,18 @@ const emitRideStatusEvents = (io, ride, statusData) => {
     paymentStatus: ride.paymentStatus || 'pending',
     amount: ride.fare?.finalAmount,
     fare: ride.fare,
+    fareBreakdown: ride.fare?.breakdown,
+    waitingChargeDetails: ride.waitingChargeDetails || null,
+    timestamps: {
+      requestedAt: ride.requestedAt,
+      driverAssignedAt: ride.driverAssignedAt,
+      driverArrivedAt: ride.driverArrivedAt,
+      pickupDepartureAt: ride.pickupDepartureAt || ride.rideStartedAt,
+      rideStartedAt: ride.rideStartedAt,
+      destinationArrivedAt: ride.destinationArrivedAt,
+      rideCompletedAt: ride.rideCompletedAt,
+      cancelledAt: ride.cancelledAt
+    },
     driver: ride.driver ? {
       driverId: ride.driver.driverId?._id || ride.driver.driverId,
       name: ride.driver.name,
@@ -915,14 +937,21 @@ export const requestRide = async (req, res) => {
         durationInTrafficText: `${totalDuration} mins`
       },
       fare: {
+        baseFareAmount:   fare.baseFareAmount || fare.finalAmount,
         distanceFare:     fare.distanceFare,
+        pickupWaitingCharge: 0,
+        destinationWaitingCharge: 0,
+        totalWaitingCharge: 0,
+        platformFee:      fare.platformFee !== undefined ? fare.platformFee : 1,
         total:            fare.total,
         discount:         fare.discount,
         cashbackAmount:   fare.cashbackAmount,
         finalAmount:      fare.finalAmount,
         isMerchantRide:   fare.isMerchantRide,
-        merchantDiscount: fare.merchantDiscount
+        merchantDiscount: fare.merchantDiscount,
+        breakdown:        fare.breakdown
       },
+      platformFeeDetails: fare.platformFeeDetails || PRICING_CONFIG.getPlatformFeeDetails(fare.platformFee || 1),
       paymentMethod,
       paymentCollectedBy: paymentMethod === 'cash' || paymentMethod === 'wallet' ? 'customer' : paymentCollectedBy,
       paymentStatus: 'pending',
@@ -1396,7 +1425,7 @@ export const rejectRide = async (req, res) => {
   }
 };
 
-// 6. Driver arrived at pickup
+// 6. Driver arrived at pickup / destination
 export const driverArrived = async (req, res) => {
   try {
     const driverId = req.driver.id;
@@ -1405,7 +1434,7 @@ export const driverArrived = async (req, res) => {
     const ride = await Ride.findOne({
       rideId,
       'driver.driverId': driverId,
-      status: 'driver_assigned'
+      status: { $in: ['driver_assigned', 'in_progress'] }
     });
 
     if (!ride) {
@@ -1415,7 +1444,56 @@ export const driverArrived = async (req, res) => {
       });
     }
 
+    // Distinguish pickup arrival from destination arrival
+    if (ride.status === 'in_progress') {
+      if (!ride.destinationArrivedAt) {
+        ride.destinationArrivedAt = new Date();
+      }
+      ride.nearDestination = true;
+      applyWaitingChargeToRide(ride);
+      await ride.save();
+
+      const io = req.app.get('io');
+      const destinationData = {
+        rideId: ride.rideId,
+        message: 'Your driver has arrived at the destination for unloading',
+        destinationArrivedAt: ride.destinationArrivedAt,
+        waitingChargeDetails: ride.waitingChargeDetails,
+        fare: ride.fare,
+        fareBreakdown: ride.fare?.breakdown
+      };
+
+      io.emit(`ride:${ride.rideId}:destination_arrived`, destinationData);
+      io.to(`ride:${ride.rideId}`).emit('driver:arrived_destination', destinationData);
+      emitRideStatusEvents(io, ride, {
+        rideId: ride.rideId,
+        status: 'in_progress',
+        subStatus: 'arrived_destination',
+        destinationArrivedAt: ride.destinationArrivedAt,
+        message: 'Driver arrived at destination for unloading'
+      });
+
+      return res.json({
+        success: true,
+        message: 'Marked as arrived at destination for unloading',
+        data: {
+          rideId: ride.rideId,
+          status: ride.status,
+          subStatus: 'arrived_destination',
+          destinationArrivedAt: ride.destinationArrivedAt,
+          waitingChargeDetails: ride.waitingChargeDetails,
+          fare: ride.fare,
+          fareBreakdown: ride.fare?.breakdown
+        }
+      });
+    }
+
+    // Pickup arrival phase
+    if (!ride.driverArrivedAt) {
+      ride.driverArrivedAt = new Date();
+    }
     ride.updateStatus('driver_arrived');
+    applyWaitingChargeToRide(ride);
     await ride.save();
 
     const io = req.app.get('io');
@@ -1460,7 +1538,9 @@ export const driverArrived = async (req, res) => {
         status: ride.status,
         arrivedAt: ride.driverArrivedAt,
         requiresPayment,
-        paymentStatus: ride.paymentStatus
+        paymentStatus: ride.paymentStatus,
+        waitingChargeDetails: ride.waitingChargeDetails,
+        fare: ride.fare
       }
     });
 
@@ -1469,6 +1549,74 @@ export const driverArrived = async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to mark arrival'
+    });
+  }
+};
+
+// 6b. Driver arrived at destination (dedicated endpoint)
+export const driverArrivedDestination = async (req, res) => {
+  try {
+    const driverId = req.driver.id;
+    const { rideId } = req.body;
+
+    const ride = await Ride.findOne({
+      rideId,
+      'driver.driverId': driverId,
+      status: 'in_progress'
+    });
+
+    if (!ride) {
+      return res.status(404).json({
+        success: false,
+        message: 'Active in-progress ride not found'
+      });
+    }
+
+    if (!ride.destinationArrivedAt) {
+      ride.destinationArrivedAt = new Date();
+    }
+    ride.nearDestination = true;
+
+    applyWaitingChargeToRide(ride);
+    await ride.save();
+
+    const io = req.app.get('io');
+    const destinationData = {
+      rideId: ride.rideId,
+      message: 'Driver has arrived at destination for unloading',
+      destinationArrivedAt: ride.destinationArrivedAt,
+      waitingChargeDetails: ride.waitingChargeDetails,
+      fare: ride.fare,
+      fareBreakdown: ride.fare?.breakdown
+    };
+
+    io.emit(`ride:${ride.rideId}:destination_arrived`, destinationData);
+    io.to(`ride:${ride.rideId}`).emit('driver:arrived_destination', destinationData);
+    emitRideStatusEvents(io, ride, {
+      rideId: ride.rideId,
+      status: 'in_progress',
+      subStatus: 'arrived_destination',
+      destinationArrivedAt: ride.destinationArrivedAt,
+      message: 'Driver arrived at destination for unloading'
+    });
+
+    res.json({
+      success: true,
+      message: 'Marked as arrived at destination for unloading',
+      data: {
+        rideId: ride.rideId,
+        status: ride.status,
+        destinationArrivedAt: ride.destinationArrivedAt,
+        waitingChargeDetails: ride.waitingChargeDetails,
+        fare: ride.fare,
+        fareBreakdown: ride.fare?.breakdown
+      }
+    });
+  } catch (error) {
+    console.error('Driver arrived destination error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to mark destination arrival'
     });
   }
 };
@@ -1511,7 +1659,11 @@ export const startRide = async (req, res) => {
       });
     }
 
+    // Stop pickup waiting timer and start traveling phase
+    ride.rideStartedAt = new Date();
+    ride.pickupDepartureAt = new Date();
     ride.updateStatus('in_progress');
+    applyWaitingChargeToRide(ride);
     await ride.save();
 
     const io = req.app.get('io');
@@ -1520,6 +1672,7 @@ export const startRide = async (req, res) => {
       rideId: ride.rideId,
       message: 'Your ride has started',
       startedAt: ride.rideStartedAt,
+      pickupWaitingMinutes: ride.waitingChargeDetails?.pickupWaitingMinutes || 0,
       receiver: ride.receiver
     });
 
@@ -1541,7 +1694,9 @@ export const startRide = async (req, res) => {
         dropLocation: ride.dropLocation,
         dropLocations: ride.dropLocations || [],
         totalStops: ride.dropLocations?.length || 1,
-        currentDropIndex: ride.currentDropIndex || 0
+        currentDropIndex: ride.currentDropIndex || 0,
+        waitingChargeDetails: ride.waitingChargeDetails,
+        fare: ride.fare
       }
     });
 
@@ -1583,6 +1738,15 @@ export const completeRide = async (req, res) => {
       ride.driver.vehicleType
     );
 
+    // Stop destination timer and finalize waiting charges
+    ride.rideCompletedAt = new Date();
+    if (!ride.destinationArrivedAt && ride.nearDestination) {
+      ride.destinationArrivedAt = ride.destinationArrivedAt || new Date();
+    }
+
+    // Apply waiting charge calculation idempotently
+    applyWaitingChargeToRide(ride);
+
     ride.actualDistance = finalRouteInfo.distance;
     ride.actualDuration = finalRouteInfo.duration;
     ride.updateStatus('completed');
@@ -1607,12 +1771,18 @@ export const completeRide = async (req, res) => {
       });
     }
 
-    // ====== WALLET ACCOUNTING LOGIC ======
-    const commissionAmount = ride.fare.finalAmount * 0.15;
-    const driverEarning = ride.fare.finalAmount - commissionAmount;
+    // ====== DRIVER EARNINGS & SETTLEMENT CALCULATION ======
+    // CRITICAL: Driver commission and payout are strictly calculated from base fare!
+    // Adding waiting charge and platform fee to the customer's total must NOT increase driver earnings.
+    const platformFee = (ride.fare.platformFee !== undefined && ride.fare.platformFee !== null) ? Number(ride.fare.platformFee) : 1;
+    const totalWaiting = ride.fare.totalWaitingCharge || 0;
+    const baseFareForDriver = ride.fare.baseFareAmount || Math.max(0, (ride.fare.finalAmount - totalWaiting - platformFee));
+    const commissionAmount = baseFareForDriver * (PRICING_CONFIG.platformCommissionPercent / 100);
+    const driverEarning = baseFareForDriver - commissionAmount;
 
     ride.fare.commissionAmount = commissionAmount;
     ride.fare.driverEarning = driverEarning;
+    ride.fare.platformFee = platformFee;
 
     await ride.save();
 
@@ -1622,13 +1792,17 @@ export const completeRide = async (req, res) => {
     let description = '';
 
     if (ride.paymentMethod === 'cash') {
-      // Driver has cash, so platform deducts commission from wallet
-      transactionAmount = -commissionAmount;
+      // Driver collects finalAmount (base fare + waiting charges + platform fee) in cash from customer.
+      // Platform deducts commission (15% of base) + waiting charges (platform component) + platform fee.
+      // Driver net cash retained = finalAmount - (commissionAmount + totalWaiting + platformFee) = driverEarning.
+      const totalPlatformDeduction = commissionAmount + totalWaiting + platformFee;
+      transactionAmount = -totalPlatformDeduction;
       txType = 'debit';
       category = 'commission_due';
-      description = 'Cash order commission';
+      description = `Cash order commission (₹${commissionAmount.toFixed(2)})${totalWaiting > 0 ? `, waiting charges (₹${totalWaiting})` : ''} & platform fee (₹${platformFee})`;
     } else {
-      // Platform has money (online/wallet), so platform credits earning to driver wallet
+      // Platform holds online/wallet money. Platform credits base-fare driver earning to driver wallet.
+      // Waiting charge & platform fee are retained as platform revenue components. Driver wallet credit = 0 for them.
       transactionAmount = driverEarning;
       txType = 'credit';
       category = 'online_order_credit';
@@ -1636,54 +1810,58 @@ export const completeRide = async (req, res) => {
     }
 
     const driverWallet = await getOrCreateDriverWallet(driver._id);
-    const previousBalance = driverWallet.balance;
-    driverWallet.balance += transactionAmount;
+    if (driverWallet) {
+      const previousBalance = driverWallet.balance;
+      driverWallet.balance += transactionAmount;
 
-    // Reset today/weekly collection if needed
-    const now = new Date();
-    const lastDate = driverWallet.lastCollectionDate || new Date(0);
-    
-    if (now.toDateString() !== lastDate.toDateString()) {
-        driverWallet.todayCollection = 0;
-    }
-    
-    const getStartOfWeek = (d) => {
-        const date = new Date(d);
-        const day = date.getDay();
-        const diff = date.getDate() - day; // Adjust to Sunday
-        return new Date(date.setDate(diff)).setHours(0,0,0,0);
-    };
+      // Reset today/weekly collection if needed
+      const now = new Date();
+      const lastDate = driverWallet.lastCollectionDate || new Date(0);
+      
+      if (now.toDateString() !== lastDate.toDateString()) {
+          driverWallet.todayCollection = 0;
+      }
+      
+      const getStartOfWeek = (d) => {
+          const date = new Date(d);
+          const day = date.getDay();
+          const diff = date.getDate() - day; // Adjust to Sunday
+          return new Date(date.setDate(diff)).setHours(0,0,0,0);
+      };
 
-    if (getStartOfWeek(now) !== getStartOfWeek(lastDate)) {
-        driverWallet.weeklyCollection = 0;
-    }
+      if (getStartOfWeek(now) !== getStartOfWeek(lastDate)) {
+          driverWallet.weeklyCollection = 0;
+      }
 
-    const currentCollection = ride.paymentMethod === 'cash' ? ride.fare.finalAmount : 0;
-    
-    driverWallet.todayCollection = (driverWallet.todayCollection || 0) + currentCollection;
-    driverWallet.weeklyCollection = (driverWallet.weeklyCollection || 0) + currentCollection;
-    driverWallet.totalCollection = (driverWallet.totalCollection || 0) + currentCollection;
-    driverWallet.lastCollectionDate = now;
+      const currentCollection = ride.paymentMethod === 'cash' ? ride.fare.finalAmount : 0;
+      
+      driverWallet.todayCollection = (driverWallet.todayCollection || 0) + currentCollection;
+      driverWallet.weeklyCollection = (driverWallet.weeklyCollection || 0) + currentCollection;
+      driverWallet.totalCollection = (driverWallet.totalCollection || 0) + currentCollection;
+      driverWallet.lastCollectionDate = now;
 
-    // Dynamic Due Limits based on vehicle
-    const dueLimits = {
-      bike: 300,
-      scooty: 300,
-      auto: 700,
-      mini_3w: 700,
-      e_loader: 700,
-      car: 700,
-      tata_ace: 700,
-      mini_truck: 700,
-      truck: 700
-    };
-    
-    const vType = (driver.vehicleType || 'bike').toLowerCase();
-    const limit = dueLimits[vType] || 300;
+      // Dynamic Due Limits based on vehicle
+      const dueLimits = {
+        bike: 300,
+        scooty: 300,
+        auto: 700,
+        mini_3w: 700,
+        e_loader: 700,
+        car: 700,
+        tata_ace: 700,
+        mini_truck: 700,
+        truck: 700
+      };
+      
+      const vType = (driver.vehicleType || 'bike').toLowerCase();
+      const limit = dueLimits[vType] || 300;
 
-    if (driverWallet.balance <= -limit) {
-      driver.isBlocked = true;
-      driver.blockReason = 'due_limit_exceeded';
+      if (driverWallet.balance <= -limit) {
+        driver.isBlocked = true;
+        driver.blockReason = 'due_limit_exceeded';
+      }
+
+      await driverWallet.save();
     }
 
     driver.totalTrips += 1;
@@ -1692,13 +1870,11 @@ export const completeRide = async (req, res) => {
     await driver.save();
 
     let customerWalletNew = null;
-    // Wallet deduction is now handled by the payWithWallet API before the ride starts.
-    // We only preserve the variable customerWalletNew for potential use below.
 
     // ====== MERCHANT CASHBACK: Credit cashback to customer wallet ======
     const cashbackToCredit = (ride.fare?.cashbackAmount && ride.fare.cashbackAmount > 0)
       ? ride.fare.cashbackAmount
-      : (ride.fare?.isMerchantRide ? Math.round((ride.fare.finalAmount || ride.fare.total || 0) * ((ride.fare.merchantDiscount || 5) / 100)) : 0);
+      : (ride.fare?.isMerchantRide ? Math.round((baseFareForDriver || 0) * ((ride.fare.merchantDiscount || 5) / 100)) : 0);
 
     if (cashbackToCredit > 0) {
       const customerWallet = await getOrCreateCustomerWallet(ride.customer.customerId);
@@ -1706,7 +1882,6 @@ export const completeRide = async (req, res) => {
       customerWallet.balance += cashbackToCredit;
       await customerWallet.save();
       
-      // Update customerWalletNew if it was already fetched for wallet ride
       if (customerWalletNew !== null) {
           customerWalletNew = customerWallet.balance;
       }
@@ -1746,6 +1921,16 @@ export const completeRide = async (req, res) => {
       rideId: ride.rideId,
       message: 'Parcel delivered successfully',
       fare: ride.fare.finalAmount,
+      fareBreakdown: {
+        baseFare: baseFareForDriver,
+        pickupWaitingCharge: ride.fare.pickupWaitingCharge || 0,
+        destinationWaitingCharge: ride.fare.destinationWaitingCharge || 0,
+        totalWaitingCharge: ride.fare.totalWaitingCharge || 0,
+        platformFee: ride.fare.platformFee || 1,
+        finalFare: ride.fare.finalAmount
+      },
+      waitingChargeDetails: ride.waitingChargeDetails,
+      platformFeeDetails: ride.platformFeeDetails,
       paymentMethod: ride.paymentMethod,
       paymentStatus: ride.paymentStatus,
       completedAt: ride.rideCompletedAt,
@@ -1759,19 +1944,19 @@ export const completeRide = async (req, res) => {
       })
     };
 
-    // Notify CUSTOMER — ride done + how much was deducted
+    // Notify CUSTOMER — ride done + full breakdown
     io.emit(`ride:${ride.rideId}:completed`, completionData);
 
     // Notify customer on default namespace ride tracking channel
     io.to(`ride:${ride.rideId}`).emit('ride:completed', completionData);
-    io.to(`ride:${ride.rideId}`).emit('ride:status-changed', {
+    emitRideStatusEvents(io, ride, {
       rideId: ride.rideId,
       status: 'completed',
       timestamp: new Date(),
       message: 'Ride completed'
     });
 
-    // Notify driver about new balance
+    // Notify driver about balance (earnings calculated solely on base fare)
     io.to(`driver:${driverId}`).emit('wallet:balance_updated', {
       walletBalance: driverWallet.balance,
       tripEarnings: driverEarning,
@@ -1782,7 +1967,10 @@ export const completeRide = async (req, res) => {
       message: `₹${driverEarning.toFixed(2)} credited to your wallet`,
       earning: driverEarning,
       commission: commissionAmount,
+      baseFare: baseFareForDriver,
       totalFare: ride.fare.finalAmount,
+      waitingCharges: ride.fare.totalWaitingCharge || 0,
+      platformFee: ride.fare.platformFee || 1,
       paymentMethod: ride.paymentMethod,
       walletBalance: driverWallet.balance,
       isBlocked: driver.isBlocked || false
@@ -1795,6 +1983,16 @@ export const completeRide = async (req, res) => {
         rideId: ride.rideId,
         status: ride.status,
         fare: ride.fare.finalAmount,
+        fareBreakdown: {
+          baseFare: baseFareForDriver,
+          pickupWaitingCharge: ride.fare.pickupWaitingCharge || 0,
+          destinationWaitingCharge: ride.fare.destinationWaitingCharge || 0,
+          totalWaitingCharge: ride.fare.totalWaitingCharge || 0,
+          platformFee: ride.fare.platformFee || 1,
+          finalFare: ride.fare.finalAmount
+        },
+        waitingChargeDetails: ride.waitingChargeDetails,
+        platformFeeDetails: ride.platformFeeDetails,
         paymentMethod: ride.paymentMethod,
         paymentStatus: ride.paymentStatus,
         completedAt: ride.rideCompletedAt,
@@ -2259,6 +2457,10 @@ export const updateRideLocation = async (req, res) => {
 
       if (distanceToDropKm <= NEAR_DESTINATION_THRESHOLD_KM && !ride.nearDestination) {
         ride.nearDestination = true;
+        if (!ride.destinationArrivedAt) {
+          ride.destinationArrivedAt = new Date();
+        }
+        applyWaitingChargeToRide(ride);
         await ride.save();
 
         const io = req.app.get('io');
@@ -2267,7 +2469,9 @@ export const updateRideLocation = async (req, res) => {
           message: 'You are within 100m of the drop location. You can now complete the ride.',
           distanceToDropMeters: Math.round(distanceToDropKm * 1000),
           dropLocation: ride.dropLocation,
-          receiver: ride.receiver
+          receiver: ride.receiver,
+          destinationArrivedAt: ride.destinationArrivedAt,
+          waitingChargeDetails: ride.waitingChargeDetails
         });
       }
     }
@@ -2279,7 +2483,9 @@ export const updateRideLocation = async (req, res) => {
       timestamp: new Date(),
       eta,
       etaText,
-      nearDestination: ride.nearDestination || false
+      nearDestination: ride.nearDestination || false,
+      destinationArrivedAt: ride.destinationArrivedAt || null,
+      waitingChargeDetails: ride.waitingChargeDetails || null
     });
 
     res.json({
@@ -2290,7 +2496,9 @@ export const updateRideLocation = async (req, res) => {
         location: [longitude, latitude],
         eta,
         etaText,
-        nearDestination: ride.nearDestination || false
+        nearDestination: ride.nearDestination || false,
+        destinationArrivedAt: ride.destinationArrivedAt || null,
+        waitingChargeDetails: ride.waitingChargeDetails || null
       }
     });
 
@@ -2356,6 +2564,9 @@ export const trackRide = async (req, res) => {
       distanceToTargetText = etaInfo.distanceText;
     }
 
+    // Live waiting charge computation for tracking view
+    applyWaitingChargeToRide(ride);
+
     res.json({
       success: true,
       data: {
@@ -2364,6 +2575,8 @@ export const trackRide = async (req, res) => {
         paymentStatus: ride.paymentStatus || 'pending',
         paymentMethod: ride.paymentMethod || 'cash',
         fare: ride.fare,
+        fareBreakdown: ride.fare?.breakdown,
+        waitingChargeDetails: ride.waitingChargeDetails,
         driverLocation,
         eta,
         etaText,
@@ -2375,6 +2588,15 @@ export const trackRide = async (req, res) => {
         totalStops: ride.dropLocations?.length || 1,
         currentDropIndex: ride.currentDropIndex || 0,
         legDistances: ride.legDistances || [],
+        timestamps: {
+          requestedAt: ride.requestedAt,
+          driverAssignedAt: ride.driverAssignedAt,
+          driverArrivedAt: ride.driverArrivedAt,
+          pickupDepartureAt: ride.pickupDepartureAt || ride.rideStartedAt,
+          rideStartedAt: ride.rideStartedAt,
+          destinationArrivedAt: ride.destinationArrivedAt,
+          rideCompletedAt: ride.rideCompletedAt
+        },
         driver: ride.driver.name ? {
           driverId: ride.driver.driverId?._id || ride.driver.driverId,
           name: ride.driver.name,
@@ -2427,6 +2649,9 @@ export const getRideStatus = async (req, res) => {
       });
     }
 
+    // Live waiting charge evaluation
+    applyWaitingChargeToRide(ride);
+
     res.json({
       success: true,
       data: {
@@ -2451,6 +2676,8 @@ export const getRideStatus = async (req, res) => {
         legDistances: ride.legDistances || [],
         currentDropIndex: ride.currentDropIndex || 0,
         fare: ride.fare,
+        fareBreakdown: ride.fare?.breakdown,
+        waitingChargeDetails: ride.waitingChargeDetails,
         distance: ride.distance,
         distanceText: ride.routeInfo?.distanceText,
         duration: ride.duration,
@@ -2462,7 +2689,9 @@ export const getRideStatus = async (req, res) => {
           requestedAt: ride.requestedAt,
           driverAssignedAt: ride.driverAssignedAt,
           driverArrivedAt: ride.driverArrivedAt,
+          pickupDepartureAt: ride.pickupDepartureAt || ride.rideStartedAt,
           rideStartedAt: ride.rideStartedAt,
+          destinationArrivedAt: ride.destinationArrivedAt,
           rideCompletedAt: ride.rideCompletedAt,
           cancelledAt: ride.cancelledAt
         }

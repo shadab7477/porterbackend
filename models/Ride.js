@@ -1,5 +1,7 @@
 import mongoose from 'mongoose';
 import MerchantSettings from './MerchantSettings.js';
+import { calculateWaitingCharge, applyWaitingChargeToRide } from '../utils/waitingChargeCalculator.js';
+import PRICING_CONFIG from '../config/pricingConfig.js';
 
 const locationSchema = new mongoose.Schema({
   type: {
@@ -41,7 +43,7 @@ const rideSchema = new mongoose.Schema({
     phone: String,
     rating: Number
   },
-  // Receiver Details
+  // Receiver Details
   receiver: {
     name: { type: String, default: '' },
     phone: { type: String, default: '' }
@@ -108,6 +110,11 @@ const rideSchema = new mongoose.Schema({
 
   // Fare Details
   fare: {
+    baseFareAmount: { type: Number },
+    pickupWaitingCharge: { type: Number, default: 0 },
+    destinationWaitingCharge: { type: Number, default: 0 },
+    totalWaitingCharge: { type: Number, default: 0 },
+    platformFee: { type: Number, default: 1 },
     distanceFare: { type: Number, default: 0 },
     total: { type: Number, required: true },
     discount: { type: Number, default: 0 },
@@ -116,7 +123,46 @@ const rideSchema = new mongoose.Schema({
     commissionAmount: { type: Number, default: 0 },
     driverEarning: { type: Number, default: 0 },
     isMerchantRide: { type: Boolean, default: false },
-    merchantDiscount: { type: Number, default: 0 }  // percentage applied
+    merchantDiscount: { type: Number, default: 0 },  // percentage applied
+    breakdown: { type: mongoose.Schema.Types.Mixed }
+  },
+
+  // Platform Fee Audit Details
+  platformFeeDetails: {
+    amount: { type: Number, default: 1 },
+    currency: { type: String, default: 'INR' },
+    feeType: { type: String, default: 'platform_fee' },
+    calculationType: { type: String, default: 'fixed_per_billable_ride' },
+    reason: { type: String, default: 'Fixed GoDelivo platform fee' },
+    charged: { type: Boolean, default: true },
+    calculationVersion: { type: Number, default: 1 },
+    calculatedAt: { type: Date, default: Date.now }
+  },
+
+  // Waiting Charge Audit Details
+  waitingChargeDetails: {
+    vehicleType: String,
+    freeMinutes: { type: Number, default: 0 },
+    ratePerMinute: { type: Number, default: 0 },
+    pickupWaitingSeconds: { type: Number, default: 0 },
+    destinationWaitingSeconds: { type: Number, default: 0 },
+    pickupWaitingMinutes: { type: Number, default: 0 },
+    destinationWaitingMinutes: { type: Number, default: 0 },
+    totalEligibleWaitingSeconds: { type: Number, default: 0 },
+    totalEligibleWaitingMinutes: { type: Number, default: 0 },
+    chargeableMinutes: { type: Number, default: 0 },
+    chargeAmount: { type: Number, default: 0 },
+    pickupWaitingCharge: { type: Number, default: 0 },
+    destinationWaitingCharge: { type: Number, default: 0 },
+    totalWaitingCharge: { type: Number, default: 0 },
+    currency: { type: String, default: 'INR' },
+    calculationReason: String,
+    chargeSource: [String],
+    travelingTimeExcluded: { type: Boolean, default: true },
+    driverWalletCredit: { type: Number, default: 0 },
+    settlementType: { type: String, default: 'customer_fare_platform_component' },
+    calculationVersion: { type: Number, default: 1 },
+    calculatedAt: Date
   },
 
   // Payment
@@ -163,7 +209,9 @@ const rideSchema = new mongoose.Schema({
   searchingStartedAt: Date,
   driverAssignedAt: Date,
   driverArrivedAt: Date,
+  pickupDepartureAt: Date,
   rideStartedAt: Date,
+  destinationArrivedAt: Date,
   rideCompletedAt: Date,
   cancelledAt: Date,
   cancelledBy: {
@@ -293,10 +341,13 @@ rideSchema.methods.updateStatus = function (status, metadata = {}) {
       this.driverAssignedAt = now;
       break;
     case 'driver_arrived':
-      this.driverArrivedAt = now;
+      if (!this.driverArrivedAt) {
+        this.driverArrivedAt = now;
+      }
       break;
     case 'in_progress':
       this.rideStartedAt = now;
+      this.pickupDepartureAt = now;
       break;
     case 'completed':
       this.rideCompletedAt = now;
@@ -318,6 +369,11 @@ rideSchema.methods.updateStatus = function (status, metadata = {}) {
   return this;
 };
 
+// Instance method to calculate and apply waiting charge
+rideSchema.methods.calculateAndApplyWaitingCharge = function (overrideCalculation = null) {
+  return applyWaitingChargeToRide(this, overrideCalculation);
+};
+
 // Static method to calculate fare — new pricing logic with baseFare, perKmAdd, and pricePerKm
 rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car', isMerchant = false) {
   if (distance < 1) distance = 1;
@@ -334,7 +390,6 @@ rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car'
       const vType = vehicleType.toLowerCase();
       vehicleDiscount = vehicle.discount || 0;
       mainPricePerKm = vehicle.mainPricePerKm || 0;
-      
       
       if (['bike', 'scooty', 'scooter'].includes(vType)) {
         baseFare = 0;
@@ -421,33 +476,44 @@ rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car'
   }
 
   let cashbackAmount = 0;
-  let finalAmount = roundedTotal;
+  let baseDistanceAmount = roundedTotal;
 
   if (isMerchant) {
     const surchargeAmount = Math.round(roundedTotal * merchantPriceIncreasePercent / 100);
     cashbackAmount = Math.round(roundedTotal * merchantCashbackPercent / 100);
-    finalAmount = roundedTotal + surchargeAmount; // price is increased for merchants
+    baseDistanceAmount = roundedTotal + surchargeAmount; // price is increased for merchants
   }
+
+  const platformFee = PRICING_CONFIG.platformFee; // Fixed ₹1 platform fee
+  const finalCustomerAmount = baseDistanceAmount + platformFee;
 
   return {
     distanceFare:     roundedTotal,
-    total:            finalAmount,
+    baseFareAmount:   baseDistanceAmount,
+    platformFee:      platformFee,
+    total:            finalCustomerAmount,
     discount:         0,
     cashbackAmount:   cashbackAmount,
-    finalAmount,
+    finalAmount:      finalCustomerAmount,
     isMerchantRide:   isMerchant,
     merchantDiscount: isMerchant ? merchantCashbackPercent : 0,
     merchantPriceIncrease: isMerchant ? merchantPriceIncreasePercent : 0,
+    pickupWaitingCharge: 0,
+    destinationWaitingCharge: 0,
+    totalWaitingCharge: 0,
     breakdown: {
       baseFare:          `₹${baseFare}`,
       ratePerKm:         `₹${ratePerKm}/km`,
       distance:          `${distance.toFixed(1)} km`,
       subtotal:          `₹${Math.round(subtotal)}`,
+      platformFee:       `₹${platformFee}`,
       discount:          discountPercentage > 0 ? `₹${Math.round(discountAmount)} (${discountPercentage}% off for >10km)` : '₹0',
       merchantSurcharge: isMerchant ? `+₹${Math.round(roundedTotal * merchantPriceIncreasePercent / 100)} (${merchantPriceIncreasePercent}% surcharge)` : '₹0',
       merchantCashback:  isMerchant ? `₹${cashbackAmount} (${merchantCashbackPercent}% cashback after ride)` : '₹0',
-      total:             `₹${finalAmount}`
-    }
+      waitingCharges:    '₹0',
+      total:             `₹${finalCustomerAmount}`
+    },
+    platformFeeDetails: PRICING_CONFIG.getPlatformFeeDetails(platformFee)
   };
 };
 
@@ -456,20 +522,22 @@ const Ride = mongoose.model('Ride', rideSchema);
 // ==================== ENSURE INDEXES CREATED ON STARTUP ====================
 (async () => {
   try {
-    await Ride.createIndexes();
-    console.log('✅ Ride indexes created successfully');
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      await Ride.createIndexes();
+      console.log('✅ Ride indexes created successfully');
 
-    const indexes = await Ride.collection.indexes();
-    const hasGeoIndex = indexes.some(idx =>
-      idx.key && idx.key.pickupLocation === '2dsphere'
-    );
+      const indexes = await Ride.collection.indexes();
+      const hasGeoIndex = indexes.some(idx =>
+        idx.key && idx.key.pickupLocation === '2dsphere'
+      );
 
-    if (hasGeoIndex) {
-      console.log('✅ Geo index on pickupLocation exists');
-    } else {
-      console.log('⚠️ Creating geo index on pickupLocation...');
-      await Ride.collection.createIndex({ pickupLocation: '2dsphere' });
-      console.log('✅ Geo index created');
+      if (hasGeoIndex) {
+        console.log('✅ Geo index on pickupLocation exists');
+      } else {
+        console.log('⚠️ Creating geo index on pickupLocation...');
+        await Ride.collection.createIndex({ pickupLocation: '2dsphere' });
+        console.log('✅ Geo index created');
+      }
     }
   } catch (error) {
     console.error('❌ Error creating indexes:', error.message);
