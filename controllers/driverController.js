@@ -34,6 +34,68 @@ export const toggleMyOnlineStatus = async (req, res) => {
     const newOnlineStatus = !driver.isOnline;
 
     if (newOnlineStatus) {
+      // Check if driver is blocked
+      if (driver.isBlocked) {
+        const dueLimits = {
+          bike: 300,
+          scooty: 300,
+          auto: 700,
+          mini_3w: 700,
+          e_loader: 700,
+          car: 700,
+          tata_ace: 700,
+          mini_truck: 700,
+          truck: 700
+        };
+        const vType = (driver.vehicleType || 'bike').toLowerCase();
+        const limit = dueLimits[vType] || 300;
+
+        let currentBalance = 0;
+        try {
+          const wallet = await DriverWallet.findOne({ driverId: driver._id });
+          if (wallet) currentBalance = wallet.balance;
+        } catch (e) {}
+
+        const dueAmount = currentBalance < 0 ? Math.abs(currentBalance) : 0;
+        const msg = driver.blockReason === 'due_limit_exceeded'
+          ? `Cannot go online. Outstanding due of ₹${dueAmount.toFixed(2)} exceeds limit of ₹${limit}. Please recharge your wallet to go online.`
+          : 'Your account is blocked. Please contact support.';
+
+        return res.status(403).json({
+          success: false,
+          isBlocked: true,
+          blockReason: driver.blockReason,
+          dueAmount,
+          dueLimit: limit,
+          message: msg
+        });
+      }
+
+      // Check real-time wallet balance against due limit
+      try {
+        const wallet = await DriverWallet.findOne({ driverId: driver._id });
+        if (wallet) {
+          const dueLimits = { bike: 300, scooty: 300, auto: 700, mini_3w: 700, e_loader: 700, car: 700, tata_ace: 700, mini_truck: 700, truck: 700 };
+          const vType = (driver.vehicleType || 'bike').toLowerCase();
+          const limit = dueLimits[vType] || 300;
+          if (wallet.balance <= -limit) {
+            driver.isBlocked = true;
+            driver.blockReason = 'due_limit_exceeded';
+            driver.isOnline = false;
+            driver.isAvailable = false;
+            await driver.save();
+            return res.status(403).json({
+              success: false,
+              isBlocked: true,
+              blockReason: 'due_limit_exceeded',
+              dueAmount: Math.abs(wallet.balance),
+              dueLimit: limit,
+              message: `Cannot go online. Outstanding due of ₹${Math.abs(wallet.balance).toFixed(2)} exceeds limit of ₹${limit}. Please recharge your wallet to go online.`
+            });
+          }
+        }
+      } catch (err) {}
+
       // When going online, location is required
       if (!latitude || !longitude) {
         return res.status(400).json({
@@ -65,8 +127,6 @@ export const toggleMyOnlineStatus = async (req, res) => {
       driver.isOnline = false;
       driver.isAvailable = false;
       driver.lastOnlineAt = null;
-      // Optionally keep last known location or clear it
-      // driver.currentLocation.coordinates = [0, 0];
     }
 
     driver.lastActive = new Date();
@@ -79,6 +139,7 @@ export const toggleMyOnlineStatus = async (req, res) => {
         driverId: driver._id,
         isOnline: driver.isOnline,
         isAvailable: driver.isAvailable,
+        isBlocked: driver.isBlocked || false,
         location: driver.currentLocation,
         timestamp: new Date()
       });
@@ -91,6 +152,8 @@ export const toggleMyOnlineStatus = async (req, res) => {
         applicationId: driver.applicationId,
         isOnline: driver.isOnline,
         isAvailable: driver.isAvailable,
+        isBlocked: driver.isBlocked || false,
+        blockReason: driver.blockReason || null,
         currentLocation: driver.currentLocation,
         lastActive: driver.lastActive,
         lastOnlineAt: driver.lastOnlineAt
@@ -111,7 +174,7 @@ export const getMyOnlineStatus = async (req, res) => {
     const driverId = req.driver.id;
 
     const driver = await Driver.findById(driverId)
-      .select('isOnline isAvailable lastActive lastOnlineAt applicationId');
+      .select('isOnline isAvailable isBlocked blockReason lastActive lastOnlineAt applicationId vehicleType');
 
     if (!driver) {
       return res.status(404).json({
@@ -120,12 +183,21 @@ export const getMyOnlineStatus = async (req, res) => {
       });
     }
 
+    let walletBalance = 0;
+    try {
+      const wallet = await DriverWallet.findOne({ driverId: driver._id });
+      if (wallet) walletBalance = wallet.balance;
+    } catch (e) {}
+
     res.status(200).json({
       success: true,
       data: {
         applicationId: driver.applicationId,
         isOnline: driver.isOnline,
         isAvailable: driver.isAvailable,
+        isBlocked: driver.isBlocked || false,
+        blockReason: driver.blockReason || null,
+        walletBalance: walletBalance,
         lastActive: driver.lastActive,
         lastOnlineAt: driver.lastOnlineAt
       }

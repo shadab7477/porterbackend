@@ -73,13 +73,16 @@ const driverAuthMiddleware = async (req, res, next) => {
       });
     }
 
-    // Check if driver is blocked (only if driver exists)
-    if (driver && driver.isBlocked) {
-      return res.status(403).json({
-        success: false,
-        message: 'Your account has been blocked. Please contact support.'
-      });
-    }
+    // Attach driver and decoded info to request (including block status)
+    req.driver = {
+      id: decoded.id || null,
+      phone: decoded.phone,
+      name: driver?.name || application?.fullName || null,
+      isVerified: application?.verificationStatus === 'verified' || false,
+      isBlocked: driver?.isBlocked || false,
+      blockReason: driver?.blockReason || null,
+      applicationId: application?._id || application || null
+    };
 
     // For protected routes (non-registration), check if driver is verified
     if (!isRegistrationRoute && !isSubscriptionRoute && driver && application) {
@@ -91,15 +94,6 @@ const driverAuthMiddleware = async (req, res, next) => {
       }
     }
 
-    // Attach driver and decoded info to request
-    req.driver = {
-      id: decoded.id || null,
-      phone: decoded.phone,
-      name: driver?.name || application?.fullName || null,
-      isVerified: application?.verificationStatus === 'verified' || false,
-      applicationId: application?._id || application || null
-    };
-    
     // Also attach decoded token for registration routes that need phone number
     req.decoded = decoded;
     

@@ -761,6 +761,25 @@ export const initializeRideTrackingSockets = (io) => {
           rideId
         });
 
+        if (isOnline) {
+          const checkDriver = await Driver.findById(driverId);
+          if (checkDriver && checkDriver.isBlocked) {
+            socket.emit('driver:blocked', {
+              isBlocked: true,
+              blockReason: checkDriver.blockReason,
+              message: checkDriver.blockReason === 'due_limit_exceeded'
+                ? 'Your account is blocked due to outstanding dues. Please recharge your wallet to go online.'
+                : 'Your account is blocked. Please contact support.'
+            });
+            await Driver.findByIdAndUpdate(driverId, {
+              isOnline: false,
+              isAvailable: false,
+              socketId: socket.id
+            });
+            return;
+          }
+        }
+
         const updatedDriver = await Driver.findByIdAndUpdate(driverId, {
           isOnline: isOnline,
           isAvailable: isAvailable,

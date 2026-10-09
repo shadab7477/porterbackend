@@ -23,16 +23,16 @@
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">65.9% </span>
+                <span class="strong">66.66% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>29/44</span>
+                <span class='fraction'>28/42</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">58.82% </span>
+                <span class="strong">60.78% </span>
                 <span class="quiet">Branches</span>
-                <span class='fraction'>30/51</span>
+                <span class='fraction'>31/51</span>
             </div>
         
             
@@ -44,9 +44,9 @@
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">65.9% </span>
+                <span class="strong">66.66% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>29/44</span>
+                <span class='fraction'>28/42</span>
             </div>
         
             
@@ -189,13 +189,7 @@
 <a name='L124'></a><a href='#L124'>124</a>
 <a name='L125'></a><a href='#L125'>125</a>
 <a name='L126'></a><a href='#L126'>126</a>
-<a name='L127'></a><a href='#L127'>127</a>
-<a name='L128'></a><a href='#L128'>128</a>
-<a name='L129'></a><a href='#L129'>129</a>
-<a name='L130'></a><a href='#L130'>130</a>
-<a name='L131'></a><a href='#L131'>131</a>
-<a name='L132'></a><a href='#L132'>132</a>
-<a name='L133'></a><a href='#L133'>133</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<a name='L127'></a><a href='#L127'>127</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -272,7 +266,10 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">9x</span>
-<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -282,15 +279,6 @@
 <span class="cline-any cline-yes">9x</span>
 <span class="cline-any cline-yes">6x</span>
 <span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">9x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -402,13 +390,16 @@ const driverAuthMiddleware = async (req, res, next) =&gt; {
       });
     }
 &nbsp;
-    // Check if driver is blocked (only if driver exists)
-    <span class="missing-if-branch" title="if path not taken" >I</span>if (driver &amp;&amp; driver.isBlocked) {
-<span class="cstat-no" title="statement not covered" >      return res.status(403).json({</span>
-        success: false,
-        message: 'Your account has been blocked. Please contact support.'
-      });
-    }
+    // Attach driver and decoded info to request (including block status)
+    req.driver = {
+      id: decoded.id || <span class="branch-1 cbranch-no" title="branch not covered" >null,</span>
+      phone: decoded.phone,
+      name: driver?.name || application?.fullName || <span class="branch-2 cbranch-no" title="branch not covered" >null,</span>
+      isVerified: application?.verificationStatus === 'verified' || <span class="branch-1 cbranch-no" title="branch not covered" >false,</span>
+      isBlocked: driver?.isBlocked || false,
+      blockReason: driver?.blockReason || null,
+      applicationId: application?._id || <span class="branch-1 cbranch-no" title="branch not covered" >application </span>|| <span class="branch-2 cbranch-no" title="branch not covered" >null</span>
+    };
 &nbsp;
     // For protected routes (non-registration), check if driver is verified
     if (!isRegistrationRoute &amp;&amp; !isSubscriptionRoute &amp;&amp; driver &amp;&amp; application) {
@@ -420,15 +411,6 @@ const driverAuthMiddleware = async (req, res, next) =&gt; {
       }
     }
 &nbsp;
-    // Attach driver and decoded info to request
-    req.driver = {
-      id: decoded.id || <span class="branch-1 cbranch-no" title="branch not covered" >null,</span>
-      phone: decoded.phone,
-      name: driver?.name || application?.fullName || <span class="branch-2 cbranch-no" title="branch not covered" >null,</span>
-      isVerified: application?.verificationStatus === 'verified' || <span class="branch-1 cbranch-no" title="branch not covered" >false,</span>
-      applicationId: application?._id || <span class="branch-1 cbranch-no" title="branch not covered" >application </span>|| <span class="branch-2 cbranch-no" title="branch not covered" >null</span>
-    };
-    
     // Also attach decoded token for registration routes that need phone number
     req.decoded = decoded;
     
@@ -466,7 +448,7 @@ export default driverAuthMiddleware;
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-10-09T11:19:50.378Z
+                at 2026-10-09T12:29:24.407Z
             </div>
         <script src="../prettify.js"></script>
         <script>

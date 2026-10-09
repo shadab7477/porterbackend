@@ -395,6 +395,21 @@ export const getDriverPendingRequests = async (req, res) => {
       });
     }
 
+    // Check if driver is blocked
+    if (driver.isBlocked) {
+      return res.json({
+        success: true,
+        data: {
+          pendingRequests: [],
+          count: 0,
+          message: driver.blockReason === 'due_limit_exceeded'
+            ? 'Account blocked due to outstanding dues. Please recharge your wallet to go online and receive rides.'
+            : 'Account is blocked. Please contact support.',
+          driverLocation: null
+        }
+      });
+    }
+
     // Check if driver is online
     if (!driver.isOnline) {
       return res.json({
@@ -1179,6 +1194,17 @@ export const acceptRide = async (req, res) => {
         message: 'You must be online and available to accept rides'
       });
     }
+
+    if (driver.isBlocked) {
+      return res.status(403).json({
+        success: false,
+        isBlocked: true,
+        blockReason: driver.blockReason,
+        message: driver.blockReason === 'due_limit_exceeded'
+          ? 'Cannot accept rides. Due limit exceeded. Please recharge your wallet.'
+          : 'Your account is blocked. Please contact support.'
+      });
+    }
     const ride = await Ride.findOne({
       rideId,
       status: { $in: ['searching', 'no_drivers'] }
@@ -1859,14 +1885,33 @@ export const completeRide = async (req, res) => {
       if (driverWallet.balance <= -limit) {
         driver.isBlocked = true;
         driver.blockReason = 'due_limit_exceeded';
+        driver.isOnline = false;
+        driver.isAvailable = false;
       }
 
       await driverWallet.save();
+
+      await DriverWalletTransaction.create({
+        driverId: driver._id,
+        amount: transactionAmount,
+        type: txType,
+        transactionCategory: category,
+        description: description,
+        previousBalance: previousBalance,
+        newBalance: driverWallet.balance,
+        orderId: ride._id,
+        status: 'completed'
+      });
     }
 
     driver.totalTrips += 1;
     driver.totalEarnings += driverEarning;
-    driver.isAvailable = true;
+    if (driver.isBlocked) {
+      driver.isOnline = false;
+      driver.isAvailable = false;
+    } else {
+      driver.isAvailable = true;
+    }
     await driver.save();
 
     let customerWalletNew = null;
@@ -1899,20 +1944,6 @@ export const completeRide = async (req, res) => {
       });
     }
     // ===================================================================
-
-    await driverWallet.save();
-
-    await DriverWalletTransaction.create({
-      driverId: driver._id,
-      amount: transactionAmount,
-      type: txType,
-      transactionCategory: category,
-      description: description,
-      previousBalance: previousBalance,
-      newBalance: driverWallet.balance,
-      orderId: ride._id,
-      status: 'completed'
-    });
     // =====================================
 
     const io = req.app.get('io');
@@ -1956,9 +1987,11 @@ export const completeRide = async (req, res) => {
       message: 'Ride completed'
     });
 
+    const finalDriverWalletBalance = driverWallet ? driverWallet.balance : 0;
+
     // Notify driver about balance (earnings calculated solely on base fare)
     io.to(`driver:${driverId}`).emit('wallet:balance_updated', {
-      walletBalance: driverWallet.balance,
+      walletBalance: finalDriverWalletBalance,
       tripEarnings: driverEarning,
       rideId: ride.rideId
     });
@@ -1972,9 +2005,26 @@ export const completeRide = async (req, res) => {
       waitingCharges: ride.fare.totalWaitingCharge || 0,
       platformFee: ride.fare.platformFee || 1,
       paymentMethod: ride.paymentMethod,
-      walletBalance: driverWallet.balance,
+      walletBalance: finalDriverWalletBalance,
       isBlocked: driver.isBlocked || false
     });
+
+    if (driver.isBlocked) {
+      io.to(`driver:${driverId}`).emit('driver:blocked', {
+        isBlocked: true,
+        blockReason: driver.blockReason,
+        walletBalance: finalDriverWalletBalance,
+        dueAmount: Math.abs(finalDriverWalletBalance),
+        message: 'Your account is blocked due to outstanding dues exceeding the limit. Please recharge your wallet to go online.'
+      });
+      io.emit('driver:status-changed', {
+        driverId: driver._id,
+        isOnline: false,
+        isAvailable: false,
+        isBlocked: true,
+        timestamp: new Date()
+      });
+    }
 
     res.json({
       success: true,
@@ -3460,6 +3510,17 @@ export const acceptRideWithSocket = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'You must be online and available to accept rides'
+      });
+    }
+
+    if (driver.isBlocked) {
+      return res.status(403).json({
+        success: false,
+        isBlocked: true,
+        blockReason: driver.blockReason,
+        message: driver.blockReason === 'due_limit_exceeded'
+          ? 'Cannot accept rides. Due limit exceeded. Please recharge your wallet.'
+          : 'Your account is blocked. Please contact support.'
       });
     }
 

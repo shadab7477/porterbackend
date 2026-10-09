@@ -23,30 +23,30 @@
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">14.28% </span>
+                <span class="strong">100% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>1/7</span>
+                <span class='fraction'>7/7</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">0% </span>
+                <span class="strong">65% </span>
                 <span class="quiet">Branches</span>
-                <span class='fraction'>0/20</span>
+                <span class='fraction'>13/20</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">0% </span>
+                <span class="strong">100% </span>
                 <span class="quiet">Functions</span>
-                <span class='fraction'>0/2</span>
+                <span class='fraction'>2/2</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">14.28% </span>
+                <span class="strong">100% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>1/7</span>
+                <span class='fraction'>7/7</span>
             </div>
         
             
@@ -61,7 +61,7 @@
             </div>
         </template>
     </div>
-    <div class='status-line low'></div>
+    <div class='status-line high'></div>
     <pre><table class="coverage">
 <tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
 <a name='L2'></a><a href='#L2'>2</a>
@@ -113,7 +113,7 @@
 <a name='L48'></a><a href='#L48'>48</a>
 <a name='L49'></a><a href='#L49'>49</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">6x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -136,17 +136,17 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">27x</span>
+<span class="cline-any cline-yes">27x</span>
+<span class="cline-any cline-yes">27x</span>
+<span class="cline-any cline-yes">27x</span>
+<span class="cline-any cline-yes">27x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">26x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -178,24 +178,24 @@ export const PRICING_CONFIG = {
    * Centralized helper to calculate final customer payable fare
    * Formula: finalFare = baseFareAmount + totalWaitingCharge + platformFee
    */
-  calculateFinalCustomerFare: <span class="fstat-no" title="function not covered" >({</span>
+  calculateFinalCustomerFare: ({
     baseFareAmount = <span class="branch-0 cbranch-no" title="branch not covered" >0,</span>
     totalWaitingCharge = <span class="branch-0 cbranch-no" title="branch not covered" >0,</span>
     platformFee = <span class="branch-0 cbranch-no" title="branch not covered" >1,</span>
-    merchantSurcharge = <span class="branch-0 cbranch-no" title="branch not covered" >0</span>
+    merchantSurcharge = 0
   } = <span class="branch-0 cbranch-no" title="branch not covered" >{})</span> =&gt; {
-    const base = <span class="cstat-no" title="statement not covered" >Number(baseFareAmount) || 0;</span>
-    const waiting = <span class="cstat-no" title="statement not covered" >Number(totalWaitingCharge) || 0;</span>
-    const fee = <span class="cstat-no" title="statement not covered" >(platformFee !== undefined &amp;&amp; platformFee !== null) ? Number(platformFee) : 1;</span>
-    const surcharge = <span class="cstat-no" title="statement not covered" >Number(merchantSurcharge) || 0;</span>
-<span class="cstat-no" title="statement not covered" >    return Math.round(base + waiting + fee + surcharge);</span>
+    const base = Number(baseFareAmount) || <span class="branch-1 cbranch-no" title="branch not covered" >0;</span>
+    const waiting = Number(totalWaitingCharge) || 0;
+    const fee = (platformFee !== undefined &amp;&amp; platformFee !== null) ? Number(platformFee) : <span class="branch-1 cbranch-no" title="branch not covered" >1;</span>
+    const surcharge = Number(merchantSurcharge) || 0;
+    return Math.round(base + waiting + fee + surcharge);
   },
 &nbsp;
   /**
    * Helper to build platform fee audit details object
    */
-  getPlatformFeeDetails: <span class="fstat-no" title="function not covered" >(a</span>ppliedFee = <span class="branch-0 cbranch-no" title="branch not covered" >1)</span> =&gt; (<span class="cstat-no" title="statement not covered" >{</span>
-    amount: (appliedFee !== undefined &amp;&amp; appliedFee !== null) ? Number(appliedFee) : 1,
+  getPlatformFeeDetails: (appliedFee = 1) =&gt; ({
+    amount: (appliedFee !== undefined &amp;&amp; appliedFee !== null) ? Number(appliedFee) : <span class="branch-1 cbranch-no" title="branch not covered" >1,</span>
     currency: 'INR',
     feeType: 'platform_fee',
     calculationType: 'fixed_per_billable_ride',
@@ -214,7 +214,7 @@ export default PRICING_CONFIG;
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-10-09T11:20:07.207Z
+                at 2026-10-09T12:29:24.407Z
             </div>
         <script src="../prettify.js"></script>
         <script>

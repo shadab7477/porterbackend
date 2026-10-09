@@ -72,6 +72,26 @@ const initializeSockets = (io) => {
         socket.join(`driver:${driverId}`);
         socket.driverId = driverId;
         
+        const driverDoc = await Driver.findById(driverId);
+        if (!driverDoc) return;
+
+        if (driverDoc.isBlocked) {
+          // Keep driver offline & unavailable if blocked
+          await Driver.findByIdAndUpdate(driverId, { 
+            socketId: socket.id,
+            isAvailable: false,
+            isOnline: false
+          });
+          socket.emit('driver:blocked', {
+            isBlocked: true,
+            blockReason: driverDoc.blockReason,
+            message: driverDoc.blockReason === 'due_limit_exceeded'
+              ? 'Your account is blocked due to outstanding dues. Please recharge your wallet to go online.'
+              : 'Your account is blocked. Please contact support.'
+          });
+          return;
+        }
+
         await Driver.findByIdAndUpdate(driverId, { 
           socketId: socket.id,
           isAvailable: true,
