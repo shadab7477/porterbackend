@@ -23,16 +23,16 @@
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">52.94% </span>
+                <span class="strong">50% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>9/17</span>
+                <span class='fraction'>9/18</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">0% </span>
+                <span class="strong">50% </span>
                 <span class="quiet">Branches</span>
-                <span class='fraction'>0/4</span>
+                <span class='fraction'>3/6</span>
             </div>
         
             
@@ -44,9 +44,9 @@
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">52.94% </span>
+                <span class="strong">50% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>9/17</span>
+                <span class='fraction'>9/18</span>
             </div>
         
             
@@ -152,7 +152,8 @@
 <a name='L87'></a><a href='#L87'>87</a>
 <a name='L88'></a><a href='#L88'>88</a>
 <a name='L89'></a><a href='#L89'>89</a>
-<a name='L90'></a><a href='#L90'>90</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<a name='L90'></a><a href='#L90'>90</a>
+<a name='L91'></a><a href='#L91'>91</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">1x</span>
@@ -212,7 +213,6 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -223,6 +223,7 @@
 <span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -230,6 +231,7 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
@@ -296,8 +298,7 @@ adminSchema.methods.generateAuthToken = <span class="fstat-no" title="function n
       username: this.username,
       role: this.role 
     },
-    process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRE || '24h' }
+    process.env.JWT_SECRET
   );
 };
 &nbsp;
@@ -309,16 +310,18 @@ adminSchema.methods.comparePassword = <span class="fstat-no" title="function not
 // Static method to initialize default admin
 adminSchema.statics.initializeDefaultAdmin = async function() {
   try {
-    const adminCount = await this.countDocuments();
-<span class="cstat-no" title="statement not covered" >    if (adminCount === 0) {</span>
-<span class="cstat-no" title="statement not covered" >      await this.create({</span>
-        username: 'admin',
-        password: 'admin123',
-        role: 'super_admin',
-        name: 'Administrator',
-        email: 'admin@logistics.com'
-      });
-<span class="cstat-no" title="statement not covered" >      console.log('✅ Default admin created: admin/admin123');</span>
+    <span class="missing-if-branch" title="if path not taken" >I</span>if (mongoose.connection &amp;&amp; mongoose.connection.readyState === 1) {
+      const adminCount = <span class="cstat-no" title="statement not covered" >await this.countDocuments();</span>
+<span class="cstat-no" title="statement not covered" >      if (adminCount === 0) {</span>
+<span class="cstat-no" title="statement not covered" >        await this.create({</span>
+          username: 'admin',
+          password: 'admin123',
+          role: 'super_admin',
+          name: 'Administrator',
+          email: 'admin@logistics.com'
+        });
+<span class="cstat-no" title="statement not covered" >        console.log('✅ Default admin created: admin/admin123');</span>
+      }
     }
   } catch (error) {
 <span class="cstat-no" title="statement not covered" >    console.error('Error initializing default admin:', error);</span>
@@ -337,7 +340,7 @@ export default Admin;</pre></td></tr></table></pre>
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-05-20T06:41:51.697Z
+                at 2026-10-09T11:20:07.207Z
             </div>
         <script src="../prettify.js"></script>
         <script>

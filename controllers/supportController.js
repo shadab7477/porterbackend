@@ -12,16 +12,16 @@ import { uploadToCloudinary } from '../config/cloudinary.js';
 const getAuthUser = (req) => {
   if (req.admin || req.adminId) {
     return {
-      userId: req.adminId || req.admin?._id,
+      userId: req.adminId || req.admin?._id || req.admin?.id,
       userType: 'ADMIN',
       userModel: 'Admin',
       name: req.admin?.name || req.admin?.username || 'Admin',
-      role: req.adminRole || 'admin',
+      role: req.adminRole || req.admin?.role || 'admin',
       isAdmin: true
     };
   }
   if (req.customer || req.customerId) {
-    const id = req.customerId || req.customer?._id;
+    const id = req.customerId || req.customer?._id || req.customer?.id;
     return {
       userId: id,
       userType: 'CUSTOMER',
@@ -34,13 +34,49 @@ const getAuthUser = (req) => {
     };
   }
   if (req.driver) {
+    const id = req.driver.id || req.driver._id;
     return {
-      userId: req.driver.id,
+      userId: id,
       userType: 'DRIVER',
       userModel: 'Driver',
       name: req.driver.name || 'Driver',
       phone: req.driver.phone || '',
       role: 'driver',
+      isAdmin: false
+    };
+  }
+  if (req.user) {
+    const roleStr = String(req.user.role || '').toLowerCase();
+    const isAdm = roleStr === 'admin' || roleStr === 'super_admin' || roleStr.includes('admin') || req.user.isAdmin;
+    if (isAdm) {
+      return {
+        userId: req.user.id || req.user._id || req.user.adminId || req.user.userId,
+        userType: 'ADMIN',
+        userModel: 'Admin',
+        name: req.user.name || req.user.username || 'Admin',
+        role: req.user.role || 'admin',
+        isAdmin: true
+      };
+    }
+    if (roleStr === 'driver' || req.user.type === 'driver_auth') {
+      return {
+        userId: req.user.id || req.user._id,
+        userType: 'DRIVER',
+        userModel: 'Driver',
+        name: req.user.name || 'Driver',
+        phone: req.user.phone || '',
+        role: 'driver',
+        isAdmin: false
+      };
+    }
+    return {
+      userId: req.user.id || req.user._id || req.user.customerId,
+      userType: 'CUSTOMER',
+      userModel: 'Customer',
+      name: req.user.name || 'Customer',
+      phone: req.user.phone || '',
+      email: req.user.email || '',
+      role: 'customer',
       isAdmin: false
     };
   }
@@ -368,7 +404,7 @@ export const getTicketById = async (req, res) => {
     // Role-based authorization
     if (!authUser?.isAdmin) {
       // Must be the owner of the ticket
-      if (!authUser || ticket.reporter.toString() !== authUser.userId.toString()) {
+      if (!authUser || !ticket.reporter || ticket.reporter.toString() !== authUser.userId?.toString()) {
         return res.status(403).json({
           success: false,
           message: 'Access denied. You can only view your own tickets.'
