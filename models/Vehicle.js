@@ -45,6 +45,12 @@ const vehicleSchema = new mongoose.Schema({
     max: 100,
     default: 0
   },
+  commissionRate: {
+    type: Number,
+    min: 0,
+    max: 100,
+    default: 15
+  },
   slabRates: {
     price1km: { type: Number, default: 0 },
     price2km: { type: Number, default: 0 },

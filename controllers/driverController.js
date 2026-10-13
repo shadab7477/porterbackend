@@ -706,8 +706,9 @@ const parseRideFare = (fare) => {
   if (fare && typeof fare === 'object') {
     const finalAmount = Number(fare.finalAmount ?? fare.total ?? fare.amount ?? 0);
     const total = Number(fare.total ?? fare.finalAmount ?? fare.amount ?? 0);
+    const commRate = Number(fare.commissionRate ?? 15);
     const commissionAmount = Number(
-      fare.commissionAmount ?? (finalAmount > 0 ? Math.round(finalAmount * 0.15 * 100) / 100 : 0)
+      fare.commissionAmount ?? (finalAmount > 0 ? Math.round(finalAmount * (commRate / 100) * 100) / 100 : 0)
     );
     const driverEarning = Number(
       fare.driverEarning ?? (finalAmount > 0 ? Math.round((finalAmount - commissionAmount) * 100) / 100 : 0)
@@ -722,6 +723,7 @@ const parseRideFare = (fare) => {
       discount,
       cashbackAmount,
       finalAmount,
+      commissionRate: commRate,
       commissionAmount,
       driverEarning,
       isMerchantRide: !!fare.isMerchantRide,

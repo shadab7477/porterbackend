@@ -120,6 +120,7 @@ const rideSchema = new mongoose.Schema({
     discount: { type: Number, default: 0 },
     cashbackAmount: { type: Number, default: 0 },
     finalAmount: { type: Number, required: true },
+    commissionRate: { type: Number, default: 15 },
     commissionAmount: { type: Number, default: 0 },
     driverEarning: { type: Number, default: 0 },
     isMerchantRide: { type: Boolean, default: false },
@@ -381,6 +382,7 @@ rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car'
   let ratePerKm = 15;
   let vehicleDiscount = 0;
   let mainPricePerKm = 0;
+  let commissionRate = PRICING_CONFIG.platformCommissionPercent || 15;
 
   try {
     const Vehicle = mongoose.model('Vehicle');
@@ -390,6 +392,9 @@ rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car'
       const vType = vehicleType.toLowerCase();
       vehicleDiscount = vehicle.discount || 0;
       mainPricePerKm = vehicle.mainPricePerKm || 0;
+      if (vehicle.commissionRate !== undefined && vehicle.commissionRate !== null) {
+        commissionRate = Number(vehicle.commissionRate);
+      }
       
       if (['bike', 'scooty', 'scooter'].includes(vType)) {
         baseFare = 0;
@@ -487,6 +492,9 @@ rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car'
   const platformFee = PRICING_CONFIG.platformFee; // Fixed ₹1 platform fee
   const finalCustomerAmount = baseDistanceAmount + platformFee;
 
+  const estimatedCommission = Math.round(baseDistanceAmount * (commissionRate / 100) * 100) / 100;
+  const estimatedDriverEarning = Math.round((baseDistanceAmount - estimatedCommission) * 100) / 100;
+
   return {
     distanceFare:     roundedTotal,
     baseFareAmount:   baseDistanceAmount,
@@ -495,6 +503,9 @@ rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car'
     discount:         0,
     cashbackAmount:   cashbackAmount,
     finalAmount:      finalCustomerAmount,
+    commissionRate:   commissionRate,
+    commissionAmount: estimatedCommission,
+    driverEarning:    estimatedDriverEarning,
     isMerchantRide:   isMerchant,
     merchantDiscount: isMerchant ? merchantCashbackPercent : 0,
     merchantPriceIncrease: isMerchant ? merchantPriceIncreasePercent : 0,
@@ -510,6 +521,7 @@ rideSchema.statics.calculateFare = async function (distance, vehicleType = 'car'
       discount:          discountPercentage > 0 ? `₹${Math.round(discountAmount)} (${discountPercentage}% off for >10km)` : '₹0',
       merchantSurcharge: isMerchant ? `+₹${Math.round(roundedTotal * merchantPriceIncreasePercent / 100)} (${merchantPriceIncreasePercent}% surcharge)` : '₹0',
       merchantCashback:  isMerchant ? `₹${cashbackAmount} (${merchantCashbackPercent}% cashback after ride)` : '₹0',
+      platformCommission: `${commissionRate}%`,
       waitingCharges:    '₹0',
       total:             `₹${finalCustomerAmount}`
     },

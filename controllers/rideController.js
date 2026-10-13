@@ -962,6 +962,9 @@ export const requestRide = async (req, res) => {
         discount:         fare.discount,
         cashbackAmount:   fare.cashbackAmount,
         finalAmount:      fare.finalAmount,
+        commissionRate:   fare.commissionRate !== undefined ? fare.commissionRate : 15,
+        commissionAmount: fare.commissionAmount || 0,
+        driverEarning:    fare.driverEarning || 0,
         isMerchantRide:   fare.isMerchantRide,
         merchantDiscount: fare.merchantDiscount,
         breakdown:        fare.breakdown
@@ -1803,9 +1806,30 @@ export const completeRide = async (req, res) => {
     const platformFee = (ride.fare.platformFee !== undefined && ride.fare.platformFee !== null) ? Number(ride.fare.platformFee) : 1;
     const totalWaiting = ride.fare.totalWaitingCharge || 0;
     const baseFareForDriver = ride.fare.baseFareAmount || Math.max(0, (ride.fare.finalAmount - totalWaiting - platformFee));
-    const commissionAmount = baseFareForDriver * (PRICING_CONFIG.platformCommissionPercent / 100);
-    const driverEarning = baseFareForDriver - commissionAmount;
 
+    // Dynamic commission rate based on ride.fare or vehicle configuration
+    let commissionPercent = ride.fare?.commissionRate;
+    if (commissionPercent === undefined || commissionPercent === null) {
+      try {
+        const vType = (ride.driver?.vehicleType || ride.vehicleType || '').toLowerCase();
+        if (vType) {
+          const vehicleDoc = await Vehicle.findOne({ vehicleType: vType });
+          if (vehicleDoc && vehicleDoc.commissionRate !== undefined && vehicleDoc.commissionRate !== null) {
+            commissionPercent = Number(vehicleDoc.commissionRate);
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching dynamic vehicle commission rate:', err);
+      }
+    }
+    if (commissionPercent === undefined || commissionPercent === null) {
+      commissionPercent = PRICING_CONFIG.platformCommissionPercent || 15;
+    }
+
+    const commissionAmount = Math.round(baseFareForDriver * (commissionPercent / 100) * 100) / 100;
+    const driverEarning = Math.round((baseFareForDriver - commissionAmount) * 100) / 100;
+
+    ride.fare.commissionRate = commissionPercent;
     ride.fare.commissionAmount = commissionAmount;
     ride.fare.driverEarning = driverEarning;
     ride.fare.platformFee = platformFee;
@@ -1819,13 +1843,13 @@ export const completeRide = async (req, res) => {
 
     if (ride.paymentMethod === 'cash') {
       // Driver collects finalAmount (base fare + waiting charges + platform fee) in cash from customer.
-      // Platform deducts commission (15% of base) + waiting charges (platform component) + platform fee.
+      // Platform deducts commission (% of base) + waiting charges (platform component) + platform fee.
       // Driver net cash retained = finalAmount - (commissionAmount + totalWaiting + platformFee) = driverEarning.
       const totalPlatformDeduction = commissionAmount + totalWaiting + platformFee;
       transactionAmount = -totalPlatformDeduction;
       txType = 'debit';
       category = 'commission_due';
-      description = `Cash order commission (₹${commissionAmount.toFixed(2)})${totalWaiting > 0 ? `, waiting charges (₹${totalWaiting})` : ''} & platform fee (₹${platformFee})`;
+      description = `Cash order commission (${commissionPercent}%: ₹${commissionAmount.toFixed(2)})${totalWaiting > 0 ? `, waiting charges (₹${totalWaiting})` : ''} & platform fee (₹${platformFee})`;
     } else {
       // Platform holds online/wallet money. Platform credits base-fare driver earning to driver wallet.
       // Waiting charge & platform fee are retained as platform revenue components. Driver wallet credit = 0 for them.
