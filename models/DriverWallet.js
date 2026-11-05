@@ -11,6 +11,13 @@ const driverWalletSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    // Non-withdrawable commission credit earned through partner referrals
+    // Used exclusively to offset future platform commissions (e.g. 15%)
+    commissionCredit: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
     todayCollection: {
         type: Number,
         default: 0

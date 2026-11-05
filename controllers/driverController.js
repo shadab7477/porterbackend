@@ -184,9 +184,13 @@ export const getMyOnlineStatus = async (req, res) => {
     }
 
     let walletBalance = 0;
+    let commissionCredit = 0;
     try {
       const wallet = await DriverWallet.findOne({ driverId: driver._id });
-      if (wallet) walletBalance = wallet.balance;
+      if (wallet) {
+        walletBalance = wallet.balance || 0;
+        commissionCredit = wallet.commissionCredit || 0;
+      }
     } catch (e) {}
 
     res.status(200).json({
@@ -198,6 +202,8 @@ export const getMyOnlineStatus = async (req, res) => {
         isBlocked: driver.isBlocked || false,
         blockReason: driver.blockReason || null,
         walletBalance: walletBalance,
+        cashWallet: walletBalance,
+        commissionCredit: commissionCredit,
         lastActive: driver.lastActive,
         lastOnlineAt: driver.lastOnlineAt
       }
@@ -606,6 +612,7 @@ export const getDriverById = async (req, res) => {
 
     const wallet = await DriverWallet.findOne({ driverId: driver._id }).lean();
     const walletBalance = wallet ? wallet.balance : 0;
+    const commissionCredit = wallet ? (wallet.commissionCredit || 0) : 0;
     const dueAmount = walletBalance < 0 ? Math.abs(walletBalance) : 0;
 
     const dueLimits = { bike: 300, scooty: 300, scooter: 300, auto: 700, mini_3w: 700, e_loader: 700, car: 700, tata_ace: 700, pickup: 700, mini_truck: 700, truck: 700 };
@@ -637,12 +644,16 @@ export const getDriverById = async (req, res) => {
         status: driver.isOnline ? (driver.isAvailable ? 'online' : 'busy') : 'offline',
         profileImage,
         verificationStatus,
+        referralCode: driver.referralCode || application?.referralCode || null,
         walletBalance,
+        cashWallet: walletBalance,
+        commissionCredit,
         dueAmount,
         dueLimit,
         isDueExceeded,
         wallet: wallet || {
           balance: 0,
+          commissionCredit: 0,
           todayCollection: 0,
           weeklyCollection: 0,
           totalCollection: 0

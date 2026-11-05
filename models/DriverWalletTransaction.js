@@ -15,9 +15,14 @@ const driverWalletTransactionSchema = new mongoose.Schema({
         enum: ['credit', 'debit'], 
         required: true
     },
+    walletType: {
+        type: String,
+        enum: ['cash', 'commission_credit'],
+        default: 'cash'
+    },
     transactionCategory: {
         type: String,
-        enum: ['commission_due', 'wallet_recharge', 'manual_adjustment', 'withdrawal', 'penalty', 'bonus', 'incentive', 'refund', 'other'],
+        enum: ['commission_due', 'wallet_recharge', 'manual_adjustment', 'withdrawal', 'penalty', 'bonus', 'incentive', 'referral_reward', 'commission_offset', 'refund', 'other'],
         default: 'other'
     },
     previousBalance: {

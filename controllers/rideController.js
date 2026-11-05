@@ -1827,10 +1827,44 @@ export const completeRide = async (req, res) => {
     }
 
     const commissionAmount = Math.round(baseFareForDriver * (commissionPercent / 100) * 100) / 100;
-    const driverEarning = Math.round((baseFareForDriver - commissionAmount) * 100) / 100;
+    
+    // Check and apply driver's Commission Credit (earned from partner referrals)
+    const driverWallet = await getOrCreateDriverWallet(driver._id);
+    let creditOffset = 0;
+    let remainingCommission = commissionAmount;
+
+    if (driverWallet && (driverWallet.commissionCredit || 0) > 0 && commissionAmount > 0) {
+      creditOffset = Math.min(driverWallet.commissionCredit, commissionAmount);
+      creditOffset = Math.round(creditOffset * 100) / 100;
+      remainingCommission = Math.max(0, Math.round((commissionAmount - creditOffset) * 100) / 100);
+
+      // Deduct from Commission Credit
+      const prevCredit = driverWallet.commissionCredit;
+      driverWallet.commissionCredit = Math.max(0, Math.round((driverWallet.commissionCredit - creditOffset) * 100) / 100);
+      await driverWallet.save();
+
+      // Create ledger transaction for the Commission Credit offset
+      await DriverWalletTransaction.create({
+        driverId: driver._id,
+        amount: -creditOffset,
+        type: 'debit',
+        walletType: 'commission_credit',
+        transactionCategory: 'commission_offset',
+        description: `Commission offset for ride #${ride.rideId} (₹${creditOffset.toFixed(2)} settled from Commission Credit)`,
+        previousBalance: prevCredit,
+        newBalance: driverWallet.commissionCredit,
+        orderId: ride._id,
+        status: 'completed'
+      });
+    }
+
+    // Driver earning calculated with effective commission (giving full base fare if 100% offset)
+    const driverEarning = Math.round((baseFareForDriver - remainingCommission) * 100) / 100;
 
     ride.fare.commissionRate = commissionPercent;
     ride.fare.commissionAmount = commissionAmount;
+    ride.fare.commissionCreditOffset = creditOffset;
+    ride.fare.effectiveCommissionAmount = remainingCommission;
     ride.fare.driverEarning = driverEarning;
     ride.fare.platformFee = platformFee;
 
@@ -1843,23 +1877,25 @@ export const completeRide = async (req, res) => {
 
     if (ride.paymentMethod === 'cash') {
       // Driver collects finalAmount (base fare + waiting charges + platform fee) in cash from customer.
-      // Platform deducts commission (% of base) + waiting charges (platform component) + platform fee.
-      // Driver net cash retained = finalAmount - (commissionAmount + totalWaiting + platformFee) = driverEarning.
-      const totalPlatformDeduction = commissionAmount + totalWaiting + platformFee;
+      // Platform deducts remainingCommission (after credit offset) + waiting charges (platform component) + platform fee.
+      // If commission is fully offset by credit, remainingCommission is 0 so driver keeps full cash without commission due!
+      const totalPlatformDeduction = remainingCommission + totalWaiting + platformFee;
       transactionAmount = -totalPlatformDeduction;
       txType = 'debit';
       category = 'commission_due';
-      description = `Cash order commission (${commissionPercent}%: ₹${commissionAmount.toFixed(2)})${totalWaiting > 0 ? `, waiting charges (₹${totalWaiting})` : ''} & platform fee (₹${platformFee})`;
+      description = creditOffset > 0
+        ? `Cash order commission (${commissionPercent}%: ₹${commissionAmount.toFixed(2)}, ₹${creditOffset.toFixed(2)} paid via Commission Credit, net due: ₹${remainingCommission.toFixed(2)})${totalWaiting > 0 ? `, waiting charges (₹${totalWaiting})` : ''} & platform fee (₹${platformFee})`
+        : `Cash order commission (${commissionPercent}%: ₹${commissionAmount.toFixed(2)})${totalWaiting > 0 ? `, waiting charges (₹${totalWaiting})` : ''} & platform fee (₹${platformFee})`;
     } else {
-      // Platform holds online/wallet money. Platform credits base-fare driver earning to driver wallet.
-      // Waiting charge & platform fee are retained as platform revenue components. Driver wallet credit = 0 for them.
+      // Platform holds online/wallet money. Platform credits driver earning (full base fare if commission is offset) to driver wallet.
       transactionAmount = driverEarning;
       txType = 'credit';
       category = 'online_order_credit';
-      description = ride.paymentMethod === 'wallet' ? 'Wallet order credit' : 'Online order credit';
+      description = creditOffset > 0
+        ? `${ride.paymentMethod === 'wallet' ? 'Wallet order credit' : 'Online order credit'} (₹${creditOffset.toFixed(2)} commission saved via Commission Credit)`
+        : (ride.paymentMethod === 'wallet' ? 'Wallet order credit' : 'Online order credit');
     }
 
-    const driverWallet = await getOrCreateDriverWallet(driver._id);
     if (driverWallet) {
       const previousBalance = driverWallet.balance;
       driverWallet.balance += transactionAmount;
@@ -2012,10 +2048,13 @@ export const completeRide = async (req, res) => {
     });
 
     const finalDriverWalletBalance = driverWallet ? driverWallet.balance : 0;
+    const finalCommissionCredit = driverWallet ? (driverWallet.commissionCredit || 0) : 0;
 
     // Notify driver about balance (earnings calculated solely on base fare)
     io.to(`driver:${driverId}`).emit('wallet:balance_updated', {
       walletBalance: finalDriverWalletBalance,
+      cashWallet: finalDriverWalletBalance,
+      commissionCredit: finalCommissionCredit,
       tripEarnings: driverEarning,
       rideId: ride.rideId
     });
@@ -2023,13 +2062,17 @@ export const completeRide = async (req, res) => {
       rideId: ride.rideId,
       message: `₹${driverEarning.toFixed(2)} credited to your wallet`,
       earning: driverEarning,
-      commission: commissionAmount,
+      commission: remainingCommission,
+      originalCommission: commissionAmount,
+      commissionCreditUsed: creditOffset,
+      commissionCreditBalance: finalCommissionCredit,
       baseFare: baseFareForDriver,
       totalFare: ride.fare.finalAmount,
       waitingCharges: ride.fare.totalWaitingCharge || 0,
       platformFee: ride.fare.platformFee || 1,
       paymentMethod: ride.paymentMethod,
       walletBalance: finalDriverWalletBalance,
+      cashWalletBalance: finalDriverWalletBalance,
       isBlocked: driver.isBlocked || false
     });
 

@@ -122,6 +122,8 @@ const rideSchema = new mongoose.Schema({
     finalAmount: { type: Number, required: true },
     commissionRate: { type: Number, default: 15 },
     commissionAmount: { type: Number, default: 0 },
+    commissionCreditOffset: { type: Number, default: 0 },
+    effectiveCommissionAmount: { type: Number, default: 0 },
     driverEarning: { type: Number, default: 0 },
     isMerchantRide: { type: Boolean, default: false },
     merchantDiscount: { type: Number, default: 0 },  // percentage applied

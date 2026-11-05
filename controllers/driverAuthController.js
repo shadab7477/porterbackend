@@ -5,7 +5,27 @@ import OTP from '../models/OTP.js';
 import { uploadToCloudinary } from '../config/cloudinary.js';
 import { generateOTP, sendSmsOtp } from '../utils/smsService.js';
 import DriverWallet from '../models/DriverWallet.js';
+import DriverWalletTransaction from '../models/DriverWalletTransaction.js';
+import DriverReferral from '../models/DriverReferral.js';
+import { sendNotification } from '../utils/notificationService.js';
 import Ride from '../models/Ride.js';
+
+// Helper to generate a unique 4-digit numeric referral code (1000 - 9999)
+export const generateUnique4DigitReferralCode = async () => {
+  let code = '';
+  let exists = true;
+  let attempts = 0;
+  while (exists && attempts < 100) {
+    attempts++;
+    code = Math.floor(1000 + Math.random() * 9000).toString();
+    const inApp = await DriverApplication.findOne({ referralCode: code });
+    const inDriver = await Driver.findOne({ referralCode: code });
+    if (!inApp && !inDriver) {
+      exists = false;
+    }
+  }
+  return code || Math.floor(1000 + Math.random() * 9000).toString();
+};
 
 // Generate driver auth token (long-lived token for authenticated drivers)
 const generateDriverToken = (driverId, phone, isVerified = false) => {
@@ -74,6 +94,11 @@ const checkDriverVerification = async (driverId) => {
 
 // Helper to ensure Driver record exists when application is verified
 const ensureDriverCreated = async (application) => {
+  if (!application.referralCode) {
+    application.referralCode = await generateUnique4DigitReferralCode();
+    await application.save();
+  }
+
   let driver = await Driver.findOne({ phone: application.phone });
   if (!driver) {
     const vType = application.vehicleType?.toLowerCase() || '';
@@ -82,6 +107,10 @@ const ensureDriverCreated = async (application) => {
 
     driver = new Driver({
       driverId: application.driverId,
+      referralCode: application.referralCode,
+      referredBy: application.referredBy,
+      referralCount: application.referralCount || 0,
+      referralEarnings: application.referralEarnings || 0,
       name: hasHired ? application.hiredDriver.name : application.fullName,
       phone: application.phone,
       email: application.email,
@@ -96,6 +125,12 @@ const ensureDriverCreated = async (application) => {
         validUntil: null
       }
     });
+    await driver.save();
+  } else if (!driver.referralCode) {
+    driver.referralCode = application.referralCode;
+    driver.referredBy = application.referredBy || driver.referredBy;
+    driver.referralCount = application.referralCount || driver.referralCount || 0;
+    driver.referralEarnings = application.referralEarnings || driver.referralEarnings || 0;
     await driver.save();
   }
   return driver;
@@ -259,6 +294,11 @@ export const verifyOTP = async (req, res) => {
           statusMessage = 'Driver verified. Login successful.';
           
           // Get or create driver entry
+          if (!existingApplication.referralCode) {
+            existingApplication.referralCode = await generateUnique4DigitReferralCode();
+            await existingApplication.save();
+          }
+
           let driver = await Driver.findOne({ phone: targetPhone });
           if (!driver) {
             const vType = existingApplication.vehicleType?.toLowerCase() || '';
@@ -267,6 +307,10 @@ export const verifyOTP = async (req, res) => {
             
             driver = new Driver({
               driverId: existingApplication.driverId,
+              referralCode: existingApplication.referralCode,
+              referredBy: existingApplication.referredBy,
+              referralCount: existingApplication.referralCount || 0,
+              referralEarnings: existingApplication.referralEarnings || 0,
               name: hasHired ? existingApplication.hiredDriver.name : existingApplication.fullName,
               phone: existingApplication.phone,
               email: existingApplication.email,
@@ -284,9 +328,17 @@ export const verifyOTP = async (req, res) => {
             });
             await driver.save();
           } else {
+            let driverModified = false;
+            if (!driver.referralCode) {
+              driver.referralCode = existingApplication.referralCode;
+              driverModified = true;
+            }
             // Update token for existing driver on login
-            if (fcmToken) {
+            if (fcmToken && driver.fcmToken !== fcmToken) {
               driver.fcmToken = fcmToken;
+              driverModified = true;
+            }
+            if (driverModified) {
               await driver.save();
             }
           }
@@ -419,6 +471,7 @@ export const verifyOTP = async (req, res) => {
     // Add applicationId only if it exists
     if (existingApplication) {
       responseData.applicationId = existingApplication._id;
+      responseData.referralCode = existingApplication.referralCode || null;
     }
 
     // Add document status if available and application exists
@@ -495,12 +548,21 @@ export const driverLogin = async (req, res) => {
     let driver = await Driver.findOne({ phone: targetPhone }).populate('applicationId');
 
     if (!driver) {
+      if (!application.referralCode) {
+        application.referralCode = await generateUnique4DigitReferralCode();
+        await application.save();
+      }
+
       const vType = application.vehicleType?.toLowerCase() || '';
       const isTwoWheeler = vType === 'bike' || vType === 'scooter';
       const hasHired = application.hiredDriver?.hasHiredDriver;
       
       driver = new Driver({
         driverId: application.driverId,
+        referralCode: application.referralCode,
+        referredBy: application.referredBy,
+        referralCount: application.referralCount || 0,
+        referralEarnings: application.referralEarnings || 0,
         name: hasHired ? application.hiredDriver.name : application.fullName,
         phone: application.phone,
         email: application.email,
@@ -516,6 +578,9 @@ export const driverLogin = async (req, res) => {
           validUntil: null
         }
       });
+      await driver.save();
+    } else if (!driver.referralCode) {
+      driver.referralCode = application.referralCode || await generateUnique4DigitReferralCode();
       await driver.save();
     } else {
       driver.lastActive = new Date();
@@ -541,6 +606,7 @@ export const driverLogin = async (req, res) => {
             driver: {
               id: driver._id,
               driverId: driver.driverId,
+              referralCode: driver.referralCode || application.referralCode || null,
               applicationId: driver.applicationId?._id || driver.applicationId,
               name: driver.name,
               phone: driver.phone,
@@ -683,6 +749,9 @@ export const completeRegistration = async (req, res) => {
         hasHiredDriver,
         hiredDriverName,
         hiredDriverPhone,
+        // Referral invite code
+        referralCode,
+        inviteCode
       } = req.body;
 
       // Validation
@@ -768,11 +837,16 @@ export const completeRegistration = async (req, res) => {
             verification: { status: 'pending' }
           };
         }
+        if (!application.referralCode) {
+          application.referralCode = await generateUnique4DigitReferralCode();
+        }
       } else {
         const driverId = 'DRV' + Date.now().toString().slice(-8) + Math.floor(Math.random() * 1000);
+        const ownReferralCode = await generateUnique4DigitReferralCode();
         
         application = new DriverApplication({
           driverId,
+          referralCode: ownReferralCode,
           phone,
           fullName,
           email,
@@ -929,6 +1003,95 @@ export const completeRegistration = async (req, res) => {
         application.submittedAt = new Date();
       }
 
+      // ==================== PROCESS REFERRAL INVITE ====================
+      const codeToRedeem = (referralCode || inviteCode || '').toString().trim();
+      if (codeToRedeem && !application.referredBy) {
+        try {
+          // Find referrer driver by 4-digit code
+          let referrer = await Driver.findOne({ referralCode: codeToRedeem });
+          if (!referrer) {
+            const referrerApp = await DriverApplication.findOne({ referralCode: codeToRedeem });
+            if (referrerApp && referrerApp.phone !== phone) {
+              referrer = await Driver.findOne({ phone: referrerApp.phone });
+              if (!referrer) {
+                referrer = await ensureDriverCreated(referrerApp);
+              }
+            }
+          }
+
+          if (referrer && referrer.phone !== phone) {
+            const existingRef = await DriverReferral.findOne({
+              referrerDriverId: referrer._id,
+              refereePhone: phone
+            });
+
+            if (!existingRef) {
+              // 1. Credit ₹99 to referrer's Commission Credit
+              let referrerWallet = await DriverWallet.findOne({ driverId: referrer._id });
+              if (!referrerWallet) {
+                referrerWallet = await DriverWallet.create({
+                  driverId: referrer._id,
+                  balance: 0,
+                  commissionCredit: 0
+                });
+              }
+
+              const prevCredit = referrerWallet.commissionCredit || 0;
+              referrerWallet.commissionCredit = prevCredit + 99;
+              await referrerWallet.save();
+
+              // 2. Add ledger transaction
+              await DriverWalletTransaction.create({
+                driverId: referrer._id,
+                amount: 99,
+                type: 'credit',
+                walletType: 'commission_credit',
+                transactionCategory: 'referral_reward',
+                description: `Partner Referral: ₹99 Commission Credit earned (Invited ${fullName || phone})`,
+                previousBalance: prevCredit,
+                newBalance: referrerWallet.commissionCredit,
+                status: 'completed'
+              });
+
+              // 3. Update referrer stats
+              referrer.referralCount = (referrer.referralCount || 0) + 1;
+              referrer.referralEarnings = (referrer.referralEarnings || 0) + 99;
+              await referrer.save();
+
+              // 4. Update applicant
+              application.referredBy = referrer._id;
+              application.referredByCode = codeToRedeem;
+
+              // 5. Create DriverReferral history
+              await DriverReferral.create({
+                referrerDriverId: referrer._id,
+                referrerPhone: referrer.phone,
+                refereeApplicationId: application._id,
+                refereeName: fullName || application.fullName,
+                refereePhone: phone,
+                referralCode: codeToRedeem,
+                rewardAmount: 99,
+                rewardType: 'commission_credit',
+                status: 'completed',
+                awardedAt: new Date()
+              });
+
+              // 6. Push notification to referrer
+              if (referrer.fcmToken) {
+                sendNotification(
+                  referrer.fcmToken,
+                  '₹99 Commission Credit Added! 🎉',
+                  `Partner ${fullName || 'Captain'} joined with your invite code ${codeToRedeem}. You earned ₹99 Commission Credit to offset future ride commissions!`,
+                  { type: 'referral_reward', amount: '99', campaign: 'driver_referral' }
+                ).catch(err => console.error('Referral FCM error:', err));
+              }
+            }
+          }
+        } catch (refErr) {
+          console.error('Error processing referral code in completeRegistration:', refErr);
+        }
+      }
+
       await application.save();
 
       if (application.verificationStatus === 'verified') {
@@ -940,6 +1103,10 @@ export const completeRegistration = async (req, res) => {
 
           verifiedDriver = new Driver({
             driverId: application.driverId,
+            referralCode: application.referralCode,
+            referredBy: application.referredBy,
+            referralCount: application.referralCount || 0,
+            referralEarnings: application.referralEarnings || 0,
             name: hasHired ? application.hiredDriver.name : application.fullName,
             phone: application.phone,
             email: application.email,
@@ -957,6 +1124,10 @@ export const completeRegistration = async (req, res) => {
           await verifiedDriver.save();
         } else {
           verifiedDriver.lastActive = new Date();
+          if (!verifiedDriver.referralCode) {
+            verifiedDriver.referralCode = application.referralCode;
+            verifiedDriver.referredBy = application.referredBy || verifiedDriver.referredBy;
+          }
           await verifiedDriver.save();
         }
 
@@ -996,6 +1167,8 @@ export const completeRegistration = async (req, res) => {
           token: responseToken,
           applicationId: application._id,
           driverId: application.driverId,
+          referralCode: application.referralCode,
+          referredBy: application.referredByCode || null,
           fullName: application.fullName,
           phone: application.phone,
           verificationStatus: application.verificationStatus,
@@ -1055,6 +1228,11 @@ export const getApplicationStatus = async (req, res) => {
       });
     }
 
+    if (!application.referralCode) {
+      application.referralCode = await generateUnique4DigitReferralCode();
+      await application.save();
+    }
+
     const documentStatus = {
       profilePhoto: application.profilePhoto?.verification?.status || 'not_uploaded',
       aadharFront: application.aadharCard?.front?.verification?.status || 'not_uploaded',
@@ -1084,6 +1262,7 @@ export const getApplicationStatus = async (req, res) => {
       driverData = {
         id: driver._id,
         driverId: driver.driverId,
+        referralCode: driver.referralCode || application.referralCode,
         applicationId: driver.applicationId?._id || driver.applicationId,
         name: driver.name,
         phone: driver.phone,
@@ -1108,6 +1287,7 @@ export const getApplicationStatus = async (req, res) => {
         requiresRegistration: application.verificationStatus === 'rejected',
         applicationId: application._id,
         driverId: application.driverId,
+        referralCode: application.referralCode,
         fullName: application.fullName,
         verificationStatus: application.verificationStatus,
         applicationStatus: application.verificationStatus,
@@ -1132,10 +1312,24 @@ export const getDriverProfile = async (req, res) => {
     const driverId = req.driver.id;
     const { driver, application } = await checkDriverVerification(driverId);
 
+    // Ensure driver has a 4-digit referral code
+    if (!driver.referralCode) {
+      driver.referralCode = application?.referralCode || await generateUnique4DigitReferralCode();
+      await driver.save();
+      if (application && !application.referralCode) {
+        application.referralCode = driver.referralCode;
+        await application.save();
+      }
+    }
+
     let walletBalance = 0;
+    let commissionCredit = 0;
     try {
       const wallet = await DriverWallet.findOne({ driverId: driver._id });
-      if (wallet) walletBalance = wallet.balance;
+      if (wallet) {
+        walletBalance = wallet.balance || 0;
+        commissionCredit = wallet.commissionCredit || 0;
+      }
     } catch (err) {}
 
     let todayEarnings = 0;
@@ -1169,6 +1363,15 @@ export const getDriverProfile = async (req, res) => {
     const profileData = {
       id: driver._id,
       driverId: driver.driverId,
+      referralCode: driver.referralCode,
+      referralStats: {
+        referralCode: driver.referralCode,
+        totalReferred: driver.referralCount || 0,
+        totalCreditsEarned: driver.referralEarnings || 0,
+        commissionCredit: commissionCredit,
+        cashWallet: walletBalance,
+        rewardPerReferral: 99
+      },
       applicationId: application?._id || driver.applicationId,
       name: driver.name,
       phone: driver.phone,
@@ -1183,7 +1386,9 @@ export const getDriverProfile = async (req, res) => {
         totalEarnings: driver.totalEarnings,
         totalTrips: driver.totalTrips,
         rating: driver.rating,
-        walletBalance: walletBalance
+        walletBalance: walletBalance,
+        cashWallet: walletBalance,
+        commissionCredit: commissionCredit
       },
       earnings: {
         today: todayEarnings,
@@ -1293,8 +1498,17 @@ export const verifyDocument = async (req, res) => {
         const isTwoWheeler = vType === 'bike' || vType === 'scooter';
         const hasHired = application.hiredDriver?.hasHiredDriver;
 
+        if (!application.referralCode) {
+          application.referralCode = await generateUnique4DigitReferralCode();
+          await application.save();
+        }
+
         driver = new Driver({
           driverId: application.driverId,
+          referralCode: application.referralCode,
+          referredBy: application.referredBy,
+          referralCount: application.referralCount || 0,
+          referralEarnings: application.referralEarnings || 0,
           name: hasHired ? application.hiredDriver.name : application.fullName,
           phone: application.phone,
           email: application.email,
@@ -1327,5 +1541,99 @@ export const verifyDocument = async (req, res) => {
       success: false,
       message: 'Failed to verify document'
     });
+  }
+};
+
+// ==================== REFER & EARN APIS ====================
+
+// 1. Validate a 4-digit referral code (Public or Auth)
+export const validateReferralCode = async (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code || String(code).trim().length !== 4) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid 4-digit referral code'
+      });
+    }
+
+    const cleanCode = String(code).trim();
+    let referrer = await Driver.findOne({ referralCode: cleanCode }).select('name phone vehicleType');
+    if (!referrer) {
+      const app = await DriverApplication.findOne({ referralCode: cleanCode }).select('fullName phone vehicleType');
+      if (app) {
+        referrer = { name: app.fullName, phone: app.phone, vehicleType: app.vehicleType };
+      }
+    }
+
+    if (!referrer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invalid referral code. No driver found with this 4-digit code.'
+      });
+    }
+
+    const maskedPhone = referrer.phone ? `${referrer.phone.slice(0, 2)}******${referrer.phone.slice(-2)}` : '';
+    res.json({
+      success: true,
+      message: `Referral code valid! Inviter: ${referrer.name || 'Captain'} (${maskedPhone})`,
+      data: {
+        code: cleanCode,
+        referrerName: referrer.name || 'Captain',
+        rewardAmount: 99
+      }
+    });
+  } catch (err) {
+    console.error('Validate referral code error:', err);
+    res.status(500).json({ success: false, message: 'Server error validating code' });
+  }
+};
+
+// 2. Get Driver Referral & Commission Credit Details (Driver Auth)
+export const getDriverReferralDetails = async (req, res) => {
+  try {
+    const driverId = req.driver?.id;
+    let driver = await Driver.findById(driverId);
+    if (!driver) {
+      return res.status(404).json({ success: false, message: 'Driver not found' });
+    }
+
+    if (!driver.referralCode) {
+      driver.referralCode = await generateUnique4DigitReferralCode();
+      await driver.save();
+    }
+
+    const wallet = await DriverWallet.findOne({ driverId: driver._id });
+    const commissionCredit = wallet ? (wallet.commissionCredit || 0) : 0;
+    const referrals = await DriverReferral.find({ referrerDriverId: driver._id })
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    res.json({
+      success: true,
+      data: {
+        referralCode: driver.referralCode,
+        commissionCredit,
+        cashWallet: wallet ? (wallet.balance || 0) : 0,
+        totalReferred: driver.referralCount || 0,
+        totalCreditsEarned: driver.referralEarnings || 0,
+        rewardPerReferral: 99,
+        title: 'Commission Credit',
+        subtitle: 'Referral Reward • Non-withdrawable',
+        description: 'Earned through partner referral. Use this credit to offset your future delivery commissions. Cannot be withdrawn or transferred as cash.',
+        referrals: referrals.map(r => ({
+          id: r._id,
+          name: r.refereeName,
+          phone: r.refereePhone ? `${r.refereePhone.slice(0, 2)}******${r.refereePhone.slice(-2)}` : '',
+          rewardAmount: r.rewardAmount,
+          rewardType: r.rewardType,
+          status: r.status,
+          date: r.createdAt
+        }))
+      }
+    });
+  } catch (err) {
+    console.error('Get driver referral details error:', err);
+    res.status(500).json({ success: false, message: 'Failed to fetch referral details' });
   }
 };

@@ -8,7 +8,9 @@ import {
   verifyDocument,
   driverLogin,
   driverLogout,
-  refreshToken
+  refreshToken,
+  validateReferralCode,
+  getDriverReferralDetails
 } from '../controllers/driverAuthController.js';
 import {
   getMainPricePerKm,
@@ -41,6 +43,9 @@ router.get('/status/:phone', getApplicationStatus);
 // Driver login (explicit login for verified drivers)
 router.post('/login', driverLogin);
 
+// Validate 4-digit referral code (public - usable before/during registration)
+router.post('/referral/validate', validateReferralCode);
+
 
 // ==================== REGISTRATION ROUTES ====================
 // Require token from OTP verification
@@ -71,6 +76,9 @@ router.post('/refresh-token', driverAuthMiddleware, refreshToken);
 
 // Profile
 router.get('/profile', driverAuthMiddleware, getDriverProfile);
+
+// Referral & Commission Credit details
+router.get('/referral/details', driverAuthMiddleware, getDriverReferralDetails);
 
 // Online status
 router.post('/toggle-online', driverAuthMiddleware, toggleMyOnlineStatus);

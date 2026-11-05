@@ -6,6 +6,26 @@ const driverSchema = new mongoose.Schema({
     unique: true,
     sparse: true
   },
+  // 4-digit numeric referral invite code (e.g. '4829')
+  referralCode: {
+    type: String,
+    sparse: true,
+    index: true,
+    trim: true
+  },
+  referredBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Driver',
+    default: null
+  },
+  referralCount: {
+    type: Number,
+    default: 0
+  },
+  referralEarnings: {
+    type: Number,
+    default: 0
+  },
   name: {
     type: String,
     required: [true, 'Driver name is required'],
