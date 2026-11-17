@@ -20,7 +20,11 @@ export const getDashboardStats = async (req, res) => {
       pendingRides,
       activeRides,
       totalRideRevenueResult,
-      totalPaymentRevenueResult
+      totalPaymentRevenueResult,
+      totalFreeRides,
+      completedFreeRides,
+      totalFreeRidePayoutResult,
+      todayFreeRides
     ] = await Promise.all([
       Driver.countDocuments({}),
       Driver.countDocuments({ isOnline: true }),
@@ -38,7 +42,21 @@ export const getDashboardStats = async (req, res) => {
       Payment.aggregate([
         { $match: { status: 'success' } },
         { $group: { _id: null, total: { $sum: '$amount' } } }
-      ])
+      ]),
+      // Free Ride tracking
+      Ride.countDocuments({ $or: [{ isFreeRide: true }, { 'fare.isFreeRide': true }] }),
+      Ride.countDocuments({ $or: [{ isFreeRide: true }, { 'fare.isFreeRide': true }], status: 'completed' }),
+      Ride.aggregate([
+        { $match: { $or: [{ isFreeRide: true }, { 'fare.isFreeRide': true }], status: 'completed' } },
+        { $group: { _id: null, total: { $sum: { $ifNull: ['$fare.driverPayoutAmount', '$fare.baseFareAmount', 0] } } } }
+      ]),
+      Ride.countDocuments({
+        $or: [{ isFreeRide: true }, { 'fare.isFreeRide': true }],
+        requestedAt: {
+          $gte: new Date(new Date().setHours(0, 0, 0, 0)),
+          $lte: new Date(new Date().setHours(23, 59, 59, 999))
+        }
+      })
     ]);
 
     const rideRevenue = totalRideRevenueResult[0]?.total || 0;
@@ -129,6 +147,12 @@ export const getDashboardStats = async (req, res) => {
         onlineDrivers,
         totalCustomers,
         totalOrders: totalRides,
+        freeRideStats: {
+          totalFreeRides,
+          completedFreeRides,
+          totalSponsoredAmount: Math.round(totalFreeRidePayoutResult[0]?.total || 0),
+          todayFreeRides
+        },
         monthlyChart,
         pie,
         goals

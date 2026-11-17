@@ -22,7 +22,7 @@ const driverWalletTransactionSchema = new mongoose.Schema({
     },
     transactionCategory: {
         type: String,
-        enum: ['commission_due', 'wallet_recharge', 'manual_adjustment', 'withdrawal', 'penalty', 'bonus', 'incentive', 'referral_reward', 'commission_offset', 'refund', 'other'],
+        enum: ['commission_due', 'wallet_recharge', 'manual_adjustment', 'withdrawal', 'penalty', 'bonus', 'incentive', 'referral_reward', 'commission_offset', 'online_order_credit', 'free_ride_payout', 'refund', 'other'],
         default: 'other'
     },
     previousBalance: {

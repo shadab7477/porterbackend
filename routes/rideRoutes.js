@@ -25,7 +25,8 @@ import {
   getRideTrackingInfo,
   acceptRideWithSocket,
   updateDriverLocationWithSocket,
-  verifyRidePayment
+  verifyRidePayment,
+  getCustomerFreeRideStatus
 } from '../controllers/rideController.js';
 import { authMiddleware } from '../middleware/authMiddleware.js';
 import { customerAuthMiddleware } from '../middleware/customerAuthMiddleware.js';
@@ -49,7 +50,8 @@ export const getAllRides = async (req, res) => {
       paymentMethod,
       minFare,
       maxFare,
-      tab
+      tab,
+      isFreeRide
     } = req.query;
 
     const query = {};
@@ -62,6 +64,8 @@ export const getAllRides = async (req, res) => {
       query.status = 'completed';
     } else if (tab === 'cancelled') {
       query.status = { $in: ['cancelled', 'no_drivers'] };
+    } else if (tab === 'free_rides' || isFreeRide === 'true' || isFreeRide === true) {
+      query.$or = [{ isFreeRide: true }, { 'fare.isFreeRide': true }];
     } else if (status) {
       query.status = status;
     }
@@ -165,7 +169,7 @@ export const getAllRides = async (req, res) => {
     const pageNum = Math.max(1, parseInt(page) || 1);
     const limitNum = Math.min(5000, Math.max(1, parseInt(limit) || 20));
 
-    const [rides, total, totalAll, totalActive, totalCompleted, totalCancelled] = await Promise.all([
+    const [rides, total, totalAll, totalActive, totalCompleted, totalCancelled, totalFreeRides] = await Promise.all([
       Ride.find(query)
         .sort({ requestedAt: -1 })
         .skip((pageNum - 1) * limitNum)
@@ -175,7 +179,8 @@ export const getAllRides = async (req, res) => {
       Ride.countDocuments({}),
       Ride.countDocuments({ status: { $in: activeRideStatuses } }),
       Ride.countDocuments({ status: 'completed' }),
-      Ride.countDocuments({ status: { $in: ['cancelled', 'no_drivers'] } })
+      Ride.countDocuments({ status: { $in: ['cancelled', 'no_drivers'] } }),
+      Ride.countDocuments({ $or: [{ isFreeRide: true }, { 'fare.isFreeRide': true }] })
     ]);
 
     res.json({
@@ -191,7 +196,8 @@ export const getAllRides = async (req, res) => {
         all: totalAll,
         active: totalActive,
         completed: totalCompleted,
-        cancelled: totalCancelled
+        cancelled: totalCancelled,
+        freeRides: totalFreeRides
       }
     });
   } catch (error) {
@@ -210,6 +216,7 @@ router.get('/nearby-drivers', getNearbyDrivers);
 router.get('/fare-estimate', calculateFareEstimate);
 
 // ==================== CUSTOMER ROUTES ====================
+router.get('/free-ride-status', customerAuthMiddleware, getCustomerFreeRideStatus);
 router.post('/request', customerAuthMiddleware, requestRide);
 router.post('/:rideId/verify-payment', customerAuthMiddleware, verifyRidePayment);
 router.get('/history', customerAuthMiddleware, getCustomerRideHistory);

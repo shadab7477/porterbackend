@@ -127,8 +127,19 @@ const rideSchema = new mongoose.Schema({
     driverEarning: { type: Number, default: 0 },
     isMerchantRide: { type: Boolean, default: false },
     merchantDiscount: { type: Number, default: 0 },  // percentage applied
+    // GoDelivo Daily Free Ride (Bike & Scooty under 2km, 1 ride/day/user)
+    isFreeRide: { type: Boolean, default: false },
+    freeRideDiscount: { type: Number, default: 0 },
+    freeRideType: { type: String, default: null },
+    sponsoredBy: { type: String, default: null },
+    customerPayable: { type: Number, default: 0 },
+    driverPayoutAmount: { type: Number, default: 0 },
+    driverPaymentNote: { type: String, default: null },
+    customerNote: { type: String, default: null },
     breakdown: { type: mongoose.Schema.Types.Mixed }
   },
+  // GoDelivo Daily Free Ride Flag
+  isFreeRide: { type: Boolean, default: false, index: true },
 
   // Platform Fee Audit Details
   platformFeeDetails: {
@@ -171,12 +182,12 @@ const rideSchema = new mongoose.Schema({
   // Payment
   paymentMethod: {
     type: String,
-    enum: ['cash', 'card', 'wallet', 'online'],
+    enum: ['cash', 'card', 'wallet', 'online', 'free'],
     default: 'cash'
   },
   paymentStatus: {
     type: String,
-    enum: ['pending', 'processing', 'completed', 'failed', 'refunded'],
+    enum: ['pending', 'processing', 'completed', 'failed', 'refunded', 'sponsored'],
     default: 'pending'
   },
   paymentIntentId: {

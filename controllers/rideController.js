@@ -13,6 +13,7 @@ import jwt from 'jsonwebtoken';
 import { logRideFlow } from '../utils/rideLogger.js';
 import { calculateWaitingCharge, applyWaitingChargeToRide, getVehicleWaitingRule } from '../utils/waitingChargeCalculator.js';
 import PRICING_CONFIG from '../config/pricingConfig.js';
+import { checkDailyFreeRideEligibility, applyFreeRideToFare, getCustomerDailyFreeRideStatus } from '../utils/freeRideService.js';
 
 // Google Maps API configuration
 const GOOGLE_MAPS_API_KEY = "AIzaSyCgpFAvw-8Q8nHEHz4z5ztx449xZLkilyk";
@@ -481,6 +482,8 @@ export const getDriverPendingRequests = async (req, res) => {
         {
           $project: {
             rideId: 1,
+            isFreeRide: 1,
+            paymentMethod: 1,
             'customer.customerId': 1,
             'customer.name': 1,
             'customer.rating': 1,
@@ -690,9 +693,15 @@ async function processRides(pendingRides, driver, driverId, driverLat, driverLon
           durationText: ride.routeInfo?.durationText || `${ride.duration} mins`,
           estimatedFare: ride.fare?.total || 0,
           paymentMethod: ride.paymentMethod,
+          isFreeRide: Boolean(ride.isFreeRide || ride.fare?.isFreeRide),
+          customerPayable: (ride.isFreeRide || ride.fare?.isFreeRide) ? 0 : (ride.fare?.customerPayable ?? ride.fare?.finalAmount ?? ride.fare?.total ?? 0),
+          driverPayoutAmount: ride.fare?.driverPayoutAmount || ride.fare?.distanceFare || ride.fare?.total || 0,
+          driverPaymentNote: ride.fare?.driverPaymentNote || ((ride.isFreeRide || ride.fare?.isFreeRide) ? 'Customer Free Ride: Collect ₹0 from customer. GoDelivo will credit the full fare to your driver wallet upon completion.' : null),
           fareBreakdown: {
             distanceFare: ride.fare?.distanceFare || 0,
-            total: ride.fare?.total || 0
+            total: ride.fare?.total || 0,
+            isFreeRide: Boolean(ride.isFreeRide || ride.fare?.isFreeRide),
+            freeRideDiscount: ride.fare?.freeRideDiscount || 0
           },
           legDistances: ride.legDistances || []
         },
@@ -905,6 +914,21 @@ export const requestRide = async (req, res) => {
     }
 
 
+    // ====== FREE RIDE CHECK: BIKE & SCOOTY <= 2KM (1 PER DAY PER USER) ======
+    const freeRideCheck = await checkDailyFreeRideEligibility(customerId, vehicleType, totalDistance);
+    let isFreeRide = false;
+    if (freeRideCheck.eligible) {
+      fare = applyFreeRideToFare(fare);
+      isFreeRide = true;
+      logRideFlow('daily-free-ride-applied', {
+        customerId,
+        vehicleType,
+        distance: totalDistance,
+        originalFare: fare.originalFare?.finalAmount,
+        driverPayoutAmount: fare.driverPayoutAmount
+      });
+    }
+
     // The final/last drop location for backward compatibility
     const finalDrop = allDropLocations[allDropLocations.length - 1];
     const [finalDropLon, finalDropLat] = finalDrop.coordinates;
@@ -918,6 +942,7 @@ export const requestRide = async (req, res) => {
 
     const ride = new Ride({
       requestedVehicleType: vehicleType,
+      isFreeRide,
       customer: {
         customerId,
         name: customer.name || 'Customer',
@@ -952,40 +977,50 @@ export const requestRide = async (req, res) => {
         durationInTrafficText: `${totalDuration} mins`
       },
       fare: {
-        baseFareAmount:   fare.baseFareAmount || fare.finalAmount,
+        baseFareAmount:   fare.baseFareAmount || fare.distanceFare || fare.finalAmount,
         distanceFare:     fare.distanceFare,
         pickupWaitingCharge: 0,
         destinationWaitingCharge: 0,
         totalWaitingCharge: 0,
-        platformFee:      fare.platformFee !== undefined ? fare.platformFee : 1,
+        platformFee:      isFreeRide ? 0 : (fare.platformFee !== undefined ? fare.platformFee : 1),
         total:            fare.total,
         discount:         fare.discount,
         cashbackAmount:   fare.cashbackAmount,
         finalAmount:      fare.finalAmount,
         commissionRate:   fare.commissionRate !== undefined ? fare.commissionRate : 15,
-        commissionAmount: fare.commissionAmount || 0,
+        commissionAmount: isFreeRide ? 0 : (fare.commissionAmount || 0),
         driverEarning:    fare.driverEarning || 0,
         isMerchantRide:   fare.isMerchantRide,
         merchantDiscount: fare.merchantDiscount,
+        isFreeRide,
+        freeRideDiscount: fare.freeRideDiscount || 0,
+        freeRideType:     fare.freeRideType || null,
+        sponsoredBy:      fare.sponsoredBy || null,
+        customerPayable:  isFreeRide ? 0 : fare.finalAmount,
+        driverPayoutAmount: fare.driverPayoutAmount || fare.distanceFare || fare.total || 0,
+        driverPaymentNote: fare.driverPaymentNote || null,
+        customerNote:     fare.customerNote || null,
         breakdown:        fare.breakdown
       },
-      platformFeeDetails: fare.platformFeeDetails || PRICING_CONFIG.getPlatformFeeDetails(fare.platformFee || 1),
-      paymentMethod,
-      paymentCollectedBy: paymentMethod === 'cash' || paymentMethod === 'wallet' ? 'customer' : paymentCollectedBy,
-      paymentStatus: 'pending',
+      platformFeeDetails: isFreeRide 
+        ? { amount: 0, currency: 'INR', feeType: 'platform_fee', charged: false, reason: 'Waived for GoDelivo Free Ride' }
+        : (fare.platformFeeDetails || PRICING_CONFIG.getPlatformFeeDetails(fare.platformFee || 1)),
+      paymentMethod: isFreeRide ? 'free' : paymentMethod,
+      paymentCollectedBy: isFreeRide ? 'godelivo' : (paymentMethod === 'cash' || paymentMethod === 'wallet' ? 'customer' : paymentCollectedBy),
+      paymentStatus: isFreeRide ? 'sponsored' : 'pending',
       status: 'requested',
       statusHistory: [{
         status: 'requested',
         previousStatus: null,
         changedBy: 'customer',
         changedById: customerId.toString(),
-        reason: 'Ride booked by customer',
+        reason: isFreeRide ? 'GoDelivo Free Ride booked by customer' : 'Ride booked by customer',
         changedAt: new Date()
       }]
     });
 
     // ====== WALLET: Pre-check balance at booking time ======
-    if (paymentMethod === 'wallet') {
+    if (paymentMethod === 'wallet' && !isFreeRide) {
       const customerWallet = await getOrCreateCustomerWallet(customerId);
       if (!customerWallet || customerWallet.balance < fare.finalAmount) {
         return res.status(400).json({
@@ -1011,7 +1046,10 @@ export const requestRide = async (req, res) => {
       pickupLocation: ride.pickupLocation,
       dropLocation: ride.dropLocation,
       dropLocations: ride.dropLocations,
-      totalStops: ride.dropLocations.length
+      totalStops: ride.dropLocations.length,
+      isFreeRide: Boolean(ride.isFreeRide),
+      customerPayable: ride.isFreeRide ? 0 : ride.fare.finalAmount,
+      driverPayoutAmount: ride.fare.driverPayoutAmount || ride.fare.total
     });
 
     findNearbyDrivers(ride, req.app.get('io'));
@@ -1022,6 +1060,11 @@ export const requestRide = async (req, res) => {
       data: {
         rideId: ride.rideId,
         status: ride.status,
+        isFreeRide: Boolean(ride.isFreeRide),
+        customerPayable: ride.isFreeRide ? 0 : ride.fare.finalAmount,
+        driverPayoutAmount: ride.fare.driverPayoutAmount || ride.fare.total,
+        driverPaymentNote: ride.fare.driverPaymentNote || null,
+        customerNote: ride.fare.customerNote || null,
         pickupLocation: ride.pickupLocation,
         dropLocation: ride.dropLocation,
         dropLocations: ride.dropLocations,
@@ -1138,6 +1181,10 @@ const findNearbyDrivers = async (ride, io, radius = 15) => {
         distanceText: ride.routeInfo.distanceText,
         estimatedFare: ride.fare.total,
         paymentMethod: ride.paymentMethod,
+        isFreeRide: Boolean(ride.isFreeRide || ride.fare?.isFreeRide),
+        customerPayable: (ride.isFreeRide || ride.fare?.isFreeRide) ? 0 : (ride.fare?.customerPayable ?? ride.fare?.finalAmount ?? ride.fare?.total ?? 0),
+        driverPayoutAmount: ride.fare?.driverPayoutAmount || ride.fare?.distanceFare || ride.fare?.total || 0,
+        driverPaymentNote: ride.fare?.driverPaymentNote || ((ride.isFreeRide || ride.fare?.isFreeRide) ? 'Customer Free Ride: Collect ₹0 from customer. GoDelivo will credit the full fare to your driver wallet upon completion.' : null),
         customerRating: ride.customer.rating,
         distanceFromDriver: etaInfo.distance,
         distanceFromDriverText: etaInfo.distanceText,
@@ -1329,7 +1376,11 @@ export const acceptRide = async (req, res) => {
       dropLocation: ride.dropLocation,
       dropLocations: ride.dropLocations || [],
       totalStops: ride.dropLocations?.length || 1,
-      fare: ride.fare.total
+      fare: ride.fare.total,
+      isFreeRide: Boolean(ride.isFreeRide || ride.fare?.isFreeRide),
+      customerPayable: (ride.isFreeRide || ride.fare?.isFreeRide) ? 0 : (ride.fare?.customerPayable ?? ride.fare?.finalAmount ?? ride.fare?.total ?? 0),
+      driverPayoutAmount: ride.fare?.driverPayoutAmount || ride.fare?.distanceFare || ride.fare?.total || 0,
+      driverPaymentNote: ride.fare?.driverPaymentNote || ((ride.isFreeRide || ride.fare?.isFreeRide) ? 'Customer Free Ride: Collect ₹0 from customer. GoDelivo will credit the full fare to your driver wallet upon completion.' : null)
     };
 
     // Broadcast compatibility event
@@ -1393,6 +1444,12 @@ export const acceptRide = async (req, res) => {
         legDistances: ride.legDistances || [],
         estimatedFare: ride.fare.total,
         paymentMethod: ride.paymentMethod,
+        isFreeRide: Boolean(ride.isFreeRide || ride.fare?.isFreeRide),
+        customerPayable: (ride.isFreeRide || ride.fare?.isFreeRide) ? 0 : (ride.fare?.customerPayable ?? ride.fare?.finalAmount ?? ride.fare?.total ?? 0),
+        driverPayoutAmount: ride.fare?.driverPayoutAmount || ride.fare?.distanceFare || ride.fare?.total || 0,
+        driverPaymentNote: ride.fare?.driverPaymentNote || ((ride.isFreeRide || ride.fare?.isFreeRide) ? 'Customer Free Ride: Collect ₹0 from customer. GoDelivo will credit the full fare to your driver wallet upon completion.' : null),
+        customerNote: ride.fare?.customerNote || ((ride.isFreeRide || ride.fare?.isFreeRide) ? '100% Free Daily Ride sponsored by GoDelivo!' : null),
+        fare: ride.fare,
         distance: ride.distance,
         distanceText: distanceText,
         eta: etaInfo.duration,
@@ -1780,12 +1837,15 @@ export const completeRide = async (req, res) => {
     ride.actualDuration = finalRouteInfo.duration;
     ride.updateStatus('completed');
 
-    if (ride.paymentMethod === 'cash') {
+    const isFreeRideRide = Boolean(ride.isFreeRide || ride.fare?.isFreeRide);
+
+    if (ride.paymentMethod === 'cash' || isFreeRideRide) {
       ride.paymentStatus = 'completed';
     }
 
     // Block completion if receiver is supposed to pay but hasn't yet
     if (
+      !isFreeRideRide &&
       ride.paymentMethod !== 'cash' &&
       ride.paymentMethod !== 'wallet' &&
       ride.paymentCollectedBy === 'receiver' &&
@@ -1803,97 +1863,130 @@ export const completeRide = async (req, res) => {
     // ====== DRIVER EARNINGS & SETTLEMENT CALCULATION ======
     // CRITICAL: Driver commission and payout are strictly calculated from base fare!
     // Adding waiting charge and platform fee to the customer's total must NOT increase driver earnings.
-    const platformFee = (ride.fare.platformFee !== undefined && ride.fare.platformFee !== null) ? Number(ride.fare.platformFee) : 1;
-    const totalWaiting = ride.fare.totalWaitingCharge || 0;
-    const baseFareForDriver = ride.fare.baseFareAmount || Math.max(0, (ride.fare.finalAmount - totalWaiting - platformFee));
+    let platformFee = (ride.fare.platformFee !== undefined && ride.fare.platformFee !== null) ? Number(ride.fare.platformFee) : 1;
+    let totalWaiting = ride.fare.totalWaitingCharge || 0;
+    let baseFareForDriver = ride.fare.baseFareAmount || Math.max(0, (ride.fare.finalAmount - totalWaiting - platformFee));
 
-    // Dynamic commission rate based on ride.fare or vehicle configuration
-    let commissionPercent = ride.fare?.commissionRate;
-    if (commissionPercent === undefined || commissionPercent === null) {
-      try {
-        const vType = (ride.driver?.vehicleType || ride.vehicleType || '').toLowerCase();
-        if (vType) {
-          const vehicleDoc = await Vehicle.findOne({ vehicleType: vType });
-          if (vehicleDoc && vehicleDoc.commissionRate !== undefined && vehicleDoc.commissionRate !== null) {
-            commissionPercent = Number(vehicleDoc.commissionRate);
-          }
-        }
-      } catch (err) {
-        console.error('Error fetching dynamic vehicle commission rate:', err);
-      }
-    }
-    if (commissionPercent === undefined || commissionPercent === null) {
-      commissionPercent = PRICING_CONFIG.platformCommissionPercent || 15;
-    }
-
-    const commissionAmount = Math.round(baseFareForDriver * (commissionPercent / 100) * 100) / 100;
-    
-    // Check and apply driver's Commission Credit (earned from partner referrals)
     const driverWallet = await getOrCreateDriverWallet(driver._id);
+    let commissionPercent = 0;
+    let commissionAmount = 0;
     let creditOffset = 0;
-    let remainingCommission = commissionAmount;
-
-    if (driverWallet && (driverWallet.commissionCredit || 0) > 0 && commissionAmount > 0) {
-      creditOffset = Math.min(driverWallet.commissionCredit, commissionAmount);
-      creditOffset = Math.round(creditOffset * 100) / 100;
-      remainingCommission = Math.max(0, Math.round((commissionAmount - creditOffset) * 100) / 100);
-
-      // Deduct from Commission Credit
-      const prevCredit = driverWallet.commissionCredit;
-      driverWallet.commissionCredit = Math.max(0, Math.round((driverWallet.commissionCredit - creditOffset) * 100) / 100);
-      await driverWallet.save();
-
-      // Create ledger transaction for the Commission Credit offset
-      await DriverWalletTransaction.create({
-        driverId: driver._id,
-        amount: -creditOffset,
-        type: 'debit',
-        walletType: 'commission_credit',
-        transactionCategory: 'commission_offset',
-        description: `Commission offset for ride #${ride.rideId} (₹${creditOffset.toFixed(2)} settled from Commission Credit)`,
-        previousBalance: prevCredit,
-        newBalance: driverWallet.commissionCredit,
-        orderId: ride._id,
-        status: 'completed'
-      });
-    }
-
-    // Driver earning calculated with effective commission (giving full base fare if 100% offset)
-    const driverEarning = Math.round((baseFareForDriver - remainingCommission) * 100) / 100;
-
-    ride.fare.commissionRate = commissionPercent;
-    ride.fare.commissionAmount = commissionAmount;
-    ride.fare.commissionCreditOffset = creditOffset;
-    ride.fare.effectiveCommissionAmount = remainingCommission;
-    ride.fare.driverEarning = driverEarning;
-    ride.fare.platformFee = platformFee;
-
-    await ride.save();
-
+    let remainingCommission = 0;
+    let driverEarning = 0;
     let transactionAmount = 0;
     let txType = '';
     let category = '';
     let description = '';
 
-    if (ride.paymentMethod === 'cash') {
-      // Driver collects finalAmount (base fare + waiting charges + platform fee) in cash from customer.
-      // Platform deducts remainingCommission (after credit offset) + waiting charges (platform component) + platform fee.
-      // If commission is fully offset by credit, remainingCommission is 0 so driver keeps full cash without commission due!
-      const totalPlatformDeduction = remainingCommission + totalWaiting + platformFee;
-      transactionAmount = -totalPlatformDeduction;
-      txType = 'debit';
-      category = 'commission_due';
-      description = creditOffset > 0
-        ? `Cash order commission (${commissionPercent}%: ₹${commissionAmount.toFixed(2)}, ₹${creditOffset.toFixed(2)} paid via Commission Credit, net due: ₹${remainingCommission.toFixed(2)})${totalWaiting > 0 ? `, waiting charges (₹${totalWaiting})` : ''} & platform fee (₹${platformFee})`
-        : `Cash order commission (${commissionPercent}%: ₹${commissionAmount.toFixed(2)})${totalWaiting > 0 ? `, waiting charges (₹${totalWaiting})` : ''} & platform fee (₹${platformFee})`;
-    } else {
-      // Platform holds online/wallet money. Platform credits driver earning (full base fare if commission is offset) to driver wallet.
-      transactionAmount = driverEarning;
+    if (isFreeRideRide) {
+      // 100% Free Ride sponsored by GoDelivo!
+      // Customer pays ₹0. Full ride fare is credited to driver's wallet by GoDelivo with 0% platform commission deducted.
+      const driverPayoutAmount = ride.fare.driverPayoutAmount || ride.fare.baseFareAmount || ride.fare.distanceFare || ride.fare.total || 30;
+      driverEarning = driverPayoutAmount;
+      commissionPercent = 0;
+      commissionAmount = 0;
+      creditOffset = 0;
+      remainingCommission = 0;
+      platformFee = 0;
+      baseFareForDriver = driverPayoutAmount;
+
+      ride.fare.commissionRate = 0;
+      ride.fare.commissionAmount = 0;
+      ride.fare.commissionCreditOffset = 0;
+      ride.fare.effectiveCommissionAmount = 0;
+      ride.fare.driverEarning = driverPayoutAmount;
+      ride.fare.platformFee = 0;
+      ride.fare.customerPayable = 0;
+      ride.fare.finalAmount = 0;
+      ride.fare.sponsoredBy = 'GoDelivo';
+
+      transactionAmount = driverPayoutAmount;
       txType = 'credit';
-      category = 'online_order_credit';
-      description = creditOffset > 0
-        ? `${ride.paymentMethod === 'wallet' ? 'Wallet order credit' : 'Online order credit'} (₹${creditOffset.toFixed(2)} commission saved via Commission Credit)`
-        : (ride.paymentMethod === 'wallet' ? 'Wallet order credit' : 'Online order credit');
+      category = 'free_ride_payout';
+      description = `GoDelivo Free Ride payout for ride #${ride.rideId} (Sponsored by GoDelivo - ₹${driverPayoutAmount} credited to wallet)`;
+
+      await ride.save();
+    } else {
+      // Dynamic commission rate based on ride.fare or vehicle configuration
+      commissionPercent = ride.fare?.commissionRate;
+      if (commissionPercent === undefined || commissionPercent === null) {
+        try {
+          const vType = (ride.driver?.vehicleType || ride.vehicleType || '').toLowerCase();
+          if (vType) {
+            const vehicleDoc = await Vehicle.findOne({ vehicleType: vType });
+            if (vehicleDoc && vehicleDoc.commissionRate !== undefined && vehicleDoc.commissionRate !== null) {
+              commissionPercent = Number(vehicleDoc.commissionRate);
+            }
+          }
+        } catch (err) {
+          console.error('Error fetching dynamic vehicle commission rate:', err);
+        }
+      }
+      if (commissionPercent === undefined || commissionPercent === null) {
+        commissionPercent = PRICING_CONFIG.platformCommissionPercent || 15;
+      }
+
+      commissionAmount = Math.round(baseFareForDriver * (commissionPercent / 100) * 100) / 100;
+      remainingCommission = commissionAmount;
+
+      // Check and apply driver's Commission Credit (earned from partner referrals)
+      if (driverWallet && (driverWallet.commissionCredit || 0) > 0 && commissionAmount > 0) {
+        creditOffset = Math.min(driverWallet.commissionCredit, commissionAmount);
+        creditOffset = Math.round(creditOffset * 100) / 100;
+        remainingCommission = Math.max(0, Math.round((commissionAmount - creditOffset) * 100) / 100);
+
+        // Deduct from Commission Credit
+        const prevCredit = driverWallet.commissionCredit;
+        driverWallet.commissionCredit = Math.max(0, Math.round((driverWallet.commissionCredit - creditOffset) * 100) / 100);
+        await driverWallet.save();
+
+        // Create ledger transaction for the Commission Credit offset
+        await DriverWalletTransaction.create({
+          driverId: driver._id,
+          amount: -creditOffset,
+          type: 'debit',
+          walletType: 'commission_credit',
+          transactionCategory: 'commission_offset',
+          description: `Commission offset for ride #${ride.rideId} (₹${creditOffset.toFixed(2)} settled from Commission Credit)`,
+          previousBalance: prevCredit,
+          newBalance: driverWallet.commissionCredit,
+          orderId: ride._id,
+          status: 'completed'
+        });
+      }
+
+      // Driver earning calculated with effective commission (giving full base fare if 100% offset)
+      driverEarning = Math.round((baseFareForDriver - remainingCommission) * 100) / 100;
+
+      ride.fare.commissionRate = commissionPercent;
+      ride.fare.commissionAmount = commissionAmount;
+      ride.fare.commissionCreditOffset = creditOffset;
+      ride.fare.effectiveCommissionAmount = remainingCommission;
+      ride.fare.driverEarning = driverEarning;
+      ride.fare.platformFee = platformFee;
+
+      await ride.save();
+
+      if (ride.paymentMethod === 'cash') {
+        // Driver collects finalAmount (base fare + waiting charges + platform fee) in cash from customer.
+        // Platform deducts remainingCommission (after credit offset) + waiting charges (platform component) + platform fee.
+        // If commission is fully offset by credit, remainingCommission is 0 so driver keeps full cash without commission due!
+        const totalPlatformDeduction = remainingCommission + totalWaiting + platformFee;
+        transactionAmount = -totalPlatformDeduction;
+        txType = 'debit';
+        category = 'commission_due';
+        description = creditOffset > 0
+          ? `Cash order commission (${commissionPercent}%: ₹${commissionAmount.toFixed(2)}, ₹${creditOffset.toFixed(2)} paid via Commission Credit, net due: ₹${remainingCommission.toFixed(2)})${totalWaiting > 0 ? `, waiting charges (₹${totalWaiting})` : ''} & platform fee (₹${platformFee})`
+          : `Cash order commission (${commissionPercent}%: ₹${commissionAmount.toFixed(2)})${totalWaiting > 0 ? `, waiting charges (₹${totalWaiting})` : ''} & platform fee (₹${platformFee})`;
+      } else {
+        // Platform holds online/wallet money. Platform credits driver earning (full base fare if commission is offset) to driver wallet.
+        transactionAmount = driverEarning;
+        txType = 'credit';
+        category = 'online_order_credit';
+        description = creditOffset > 0
+          ? `${ride.paymentMethod === 'wallet' ? 'Wallet order credit' : 'Online order credit'} (₹${creditOffset.toFixed(2)} commission saved via Commission Credit)`
+          : (ride.paymentMethod === 'wallet' ? 'Wallet order credit' : 'Online order credit');
+      }
     }
 
     if (driverWallet) {
@@ -1919,7 +2012,7 @@ export const completeRide = async (req, res) => {
           driverWallet.weeklyCollection = 0;
       }
 
-      const currentCollection = ride.paymentMethod === 'cash' ? ride.fare.finalAmount : 0;
+      const currentCollection = (!isFreeRideRide && ride.paymentMethod === 'cash') ? ride.fare.finalAmount : 0;
       
       driverWallet.todayCollection = (driverWallet.todayCollection || 0) + currentCollection;
       driverWallet.weeklyCollection = (driverWallet.weeklyCollection || 0) + currentCollection;
@@ -1977,9 +2070,9 @@ export const completeRide = async (req, res) => {
     let customerWalletNew = null;
 
     // ====== MERCHANT CASHBACK: Credit cashback to customer wallet ======
-    const cashbackToCredit = (ride.fare?.cashbackAmount && ride.fare.cashbackAmount > 0)
+    const cashbackToCredit = (!isFreeRideRide && ride.fare?.cashbackAmount && ride.fare.cashbackAmount > 0)
       ? ride.fare.cashbackAmount
-      : (ride.fare?.isMerchantRide ? Math.round((baseFareForDriver || 0) * ((ride.fare.merchantDiscount || 5) / 100)) : 0);
+      : (!isFreeRideRide && ride.fare?.isMerchantRide ? Math.round((baseFareForDriver || 0) * ((ride.fare.merchantDiscount || 5) / 100)) : 0);
 
     if (cashbackToCredit > 0) {
       const customerWallet = await getOrCreateCustomerWallet(ride.customer.customerId);
@@ -2004,21 +2097,27 @@ export const completeRide = async (req, res) => {
       });
     }
     // ===================================================================
-    // =====================================
 
     const io = req.app.get('io');
 
     const completionData = {
       rideId: ride.rideId,
-      message: 'Parcel delivered successfully',
-      fare: ride.fare.finalAmount,
+      message: isFreeRideRide ? 'Ride completed - GoDelivo Free Ride (Customer pays ₹0)' : 'Parcel delivered successfully',
+      isFreeRide: isFreeRideRide,
+      customerPayable: isFreeRideRide ? 0 : ride.fare.finalAmount,
+      driverPayoutAmount: isFreeRideRide ? driverEarning : undefined,
+      driverPaymentNote: isFreeRideRide ? `GoDelivo Free Ride: ₹${driverEarning.toFixed(2)} has been credited directly to your driver wallet.` : undefined,
+      customerNote: isFreeRideRide ? '100% Free daily ride sponsored by GoDelivo! (1 ride/day for bike & scooty <= 2km)' : undefined,
+      fare: isFreeRideRide ? 0 : ride.fare.finalAmount,
       fareBreakdown: {
         baseFare: baseFareForDriver,
         pickupWaitingCharge: ride.fare.pickupWaitingCharge || 0,
         destinationWaitingCharge: ride.fare.destinationWaitingCharge || 0,
         totalWaitingCharge: ride.fare.totalWaitingCharge || 0,
-        platformFee: ride.fare.platformFee || 1,
-        finalFare: ride.fare.finalAmount
+        platformFee: isFreeRideRide ? 0 : (ride.fare.platformFee || 1),
+        finalFare: ride.fare.finalAmount,
+        isFreeRide: isFreeRideRide,
+        sponsoredBy: isFreeRideRide ? 'GoDelivo' : undefined
       },
       waitingChargeDetails: ride.waitingChargeDetails,
       platformFeeDetails: ride.platformFeeDetails,
@@ -2029,7 +2128,7 @@ export const completeRide = async (req, res) => {
       actualDuration: finalRouteInfo.durationText,
       receiver: ride.receiver,
       // Wallet rides — show deduction info to customer
-      ...(ride.paymentMethod === 'wallet' && {
+      ...(!isFreeRideRide && ride.paymentMethod === 'wallet' && {
         walletDeducted: ride.fare.finalAmount,
         newWalletBalance: customerWalletNew
       })
@@ -2044,7 +2143,7 @@ export const completeRide = async (req, res) => {
       rideId: ride.rideId,
       status: 'completed',
       timestamp: new Date(),
-      message: 'Ride completed'
+      message: isFreeRideRide ? 'GoDelivo Free Ride completed' : 'Ride completed'
     });
 
     const finalDriverWalletBalance = driverWallet ? driverWallet.balance : 0;
@@ -2060,16 +2159,20 @@ export const completeRide = async (req, res) => {
     });
     io.to(`driver:${driverId}`).emit('driver:earnings_credited', {
       rideId: ride.rideId,
-      message: `₹${driverEarning.toFixed(2)} credited to your wallet`,
+      message: isFreeRideRide
+        ? `₹${driverEarning.toFixed(2)} credited to your wallet (Sponsored by GoDelivo Free Ride)`
+        : `₹${driverEarning.toFixed(2)} credited to your wallet`,
       earning: driverEarning,
       commission: remainingCommission,
       originalCommission: commissionAmount,
       commissionCreditUsed: creditOffset,
       commissionCreditBalance: finalCommissionCredit,
+      isFreeRide: isFreeRideRide,
+      sponsoredBy: isFreeRideRide ? 'GoDelivo' : undefined,
       baseFare: baseFareForDriver,
       totalFare: ride.fare.finalAmount,
       waitingCharges: ride.fare.totalWaitingCharge || 0,
-      platformFee: ride.fare.platformFee || 1,
+      platformFee: isFreeRideRide ? 0 : (ride.fare.platformFee || 1),
       paymentMethod: ride.paymentMethod,
       walletBalance: finalDriverWalletBalance,
       cashWalletBalance: finalDriverWalletBalance,
@@ -2095,18 +2198,27 @@ export const completeRide = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Ride completed successfully',
+      message: isFreeRideRide 
+        ? 'Ride completed successfully. Driver wallet has been credited with the full ride fare by GoDelivo.'
+        : 'Ride completed successfully',
       data: {
         rideId: ride.rideId,
         status: ride.status,
+        isFreeRide: isFreeRideRide,
+        customerPayable: isFreeRideRide ? 0 : ride.fare.finalAmount,
+        driverPayoutAmount: isFreeRideRide ? driverEarning : undefined,
+        driverPaymentNote: isFreeRideRide ? `GoDelivo Free Ride: ₹${driverEarning.toFixed(2)} credited directly to driver wallet.` : undefined,
+        customerNote: isFreeRideRide ? '100% Free daily ride sponsored by GoDelivo!' : undefined,
         fare: ride.fare.finalAmount,
         fareBreakdown: {
           baseFare: baseFareForDriver,
           pickupWaitingCharge: ride.fare.pickupWaitingCharge || 0,
           destinationWaitingCharge: ride.fare.destinationWaitingCharge || 0,
           totalWaitingCharge: ride.fare.totalWaitingCharge || 0,
-          platformFee: ride.fare.platformFee || 1,
-          finalFare: ride.fare.finalAmount
+          platformFee: isFreeRideRide ? 0 : (ride.fare.platformFee || 1),
+          finalFare: ride.fare.finalAmount,
+          isFreeRide: isFreeRideRide,
+          sponsoredBy: isFreeRideRide ? 'GoDelivo' : undefined
         },
         waitingChargeDetails: ride.waitingChargeDetails,
         platformFeeDetails: ride.platformFeeDetails,
@@ -2689,6 +2801,11 @@ export const trackRide = async (req, res) => {
       data: {
         rideId: ride.rideId,
         status: ride.status,
+        isFreeRide: Boolean(ride.isFreeRide || ride.fare?.isFreeRide),
+        customerPayable: (ride.isFreeRide || ride.fare?.isFreeRide) ? 0 : (ride.fare?.customerPayable ?? ride.fare?.finalAmount ?? ride.fare?.total ?? 0),
+        driverPayoutAmount: ride.fare?.driverPayoutAmount || ride.fare?.distanceFare || ride.fare?.total || 0,
+        driverPaymentNote: ride.fare?.driverPaymentNote || ((ride.isFreeRide || ride.fare?.isFreeRide) ? 'Customer Free Ride: Collect ₹0 from customer. GoDelivo will credit the full fare to your driver wallet upon completion.' : null),
+        customerNote: ride.fare?.customerNote || ((ride.isFreeRide || ride.fare?.isFreeRide) ? '100% Free Daily Ride sponsored by GoDelivo!' : null),
         paymentStatus: ride.paymentStatus || 'pending',
         paymentMethod: ride.paymentMethod || 'cash',
         fare: ride.fare,
@@ -2774,6 +2891,11 @@ export const getRideStatus = async (req, res) => {
       data: {
         rideId: ride.rideId,
         status: ride.status,
+        isFreeRide: Boolean(ride.isFreeRide || ride.fare?.isFreeRide),
+        customerPayable: (ride.isFreeRide || ride.fare?.isFreeRide) ? 0 : (ride.fare?.customerPayable ?? ride.fare?.finalAmount ?? ride.fare?.total ?? 0),
+        driverPayoutAmount: ride.fare?.driverPayoutAmount || ride.fare?.distanceFare || ride.fare?.total || 0,
+        driverPaymentNote: ride.fare?.driverPaymentNote || ((ride.isFreeRide || ride.fare?.isFreeRide) ? 'Customer Free Ride: Collect ₹0 from customer. GoDelivo will credit the full fare to your driver wallet upon completion.' : null),
+        customerNote: ride.fare?.customerNote || ((ride.isFreeRide || ride.fare?.isFreeRide) ? '100% Free Daily Ride sponsored by GoDelivo!' : null),
         driver: ride.driver ? {
           name: ride.driver.name,
           vehicleType: ride.driver.vehicleType,
@@ -3353,12 +3475,23 @@ export const calculateFareEstimate = async (req, res) => {
     }
 
     // Calculate fare based on total cumulative distance
-    const fare = await Ride.calculateFare(totalDistance, vehicleType, isMerchant);
+    let fare = await Ride.calculateFare(totalDistance, vehicleType, isMerchant);
+    const freeRideCheck = await checkDailyFreeRideEligibility(targetCustId, vehicleType, totalDistance);
+    let estimatedFare = fare;
+    if (freeRideCheck.eligible) {
+      estimatedFare = applyFreeRideToFare(fare);
+    }
 
     // Fetch all active vehicles to calculate their specific fares
     const activeVehicles = await Vehicle.find({ isActive: true }).sort({ baseFare: 1 });
     const vehicleOptions = await Promise.all(activeVehicles.map(async (v) => {
-      const vFare = await Ride.calculateFare(totalDistance, v.vehicleType, isMerchant);
+      let vFare = await Ride.calculateFare(totalDistance, v.vehicleType, isMerchant);
+      const vFreeCheck = await checkDailyFreeRideEligibility(targetCustId, v.vehicleType, totalDistance);
+      let vIsFree = false;
+      if (vFreeCheck.eligible) {
+        vFare = applyFreeRideToFare(vFare);
+        vIsFree = true;
+      }
       
       // Calculate eta for this specific vehicle type
       const speed = v.vehicleType.toLowerCase().includes('bike') || v.vehicleType.toLowerCase().includes('scooter') || v.vehicleType.toLowerCase().includes('scooty') ? 35 : 25; // km/h
@@ -3370,9 +3503,14 @@ export const calculateFareEstimate = async (req, res) => {
         name: v.name,
         capacity: v.capacity,
         weight: v.weight,
+        isFreeRide: vIsFree,
+        customerPayable: vIsFree ? 0 : vFare.total,
+        freeRideTag: vIsFree ? 'FREE (GoDelivo Daily Offer <= 2km)' : null,
         fare: {
           distanceFare: vFare.distanceFare,
           total: vFare.total,
+          isFreeRide: vIsFree,
+          customerPayable: vIsFree ? 0 : vFare.total,
           breakdown: vFare.breakdown
         },
         duration: durationMins,
@@ -3411,18 +3549,36 @@ export const calculateFareEstimate = async (req, res) => {
         duration: totalDuration,
         durationText: `${totalDuration} mins`,
         legDistances,
+        isFreeRide: Boolean(estimatedFare.isFreeRide),
+        customerPayable: estimatedFare.isFreeRide ? 0 : estimatedFare.total,
+        driverPayoutAmount: estimatedFare.driverPayoutAmount || estimatedFare.total,
+        driverPaymentNote: estimatedFare.driverPaymentNote || null,
+        customerNote: estimatedFare.customerNote || null,
+        freeRideInfo: freeRideCheck.eligible ? {
+          isFreeRide: true,
+          customerPayable: 0,
+          driverPayoutAmount: estimatedFare.driverPayoutAmount || estimatedFare.total,
+          sponsoredBy: 'GoDelivo',
+          message: 'Your 1st ride under 2km on Bike/Scooty today is 100% FREE!'
+        } : {
+          isFreeRide: false,
+          reason: freeRideCheck.reason
+        },
         fare: {
-          distanceFare: fare.distanceFare,
-          total: fare.total,
+          distanceFare: estimatedFare.distanceFare,
+          total: estimatedFare.total,
+          isFreeRide: Boolean(estimatedFare.isFreeRide),
+          customerPayable: estimatedFare.isFreeRide ? 0 : estimatedFare.total,
+          driverPayoutAmount: estimatedFare.driverPayoutAmount || estimatedFare.total,
           breakdown: {
-            ...fare.breakdown,
+            ...estimatedFare.breakdown,
             legs: legDistances.map(leg => ({
               leg: `${leg.from} → ${leg.to}`,
               distance: leg.distanceText,
               duration: leg.durationText
             })),
             totalDistance: `${totalDistance.toFixed(1)} km`,
-            totalFare: `₹${fare.total}`
+            totalFare: `₹${estimatedFare.total}`
           }
         },
         vehicleType,
@@ -3668,7 +3824,11 @@ export const acceptRideWithSocket = async (req, res) => {
       dropLocation: ride.dropLocation,
       dropLocations: ride.dropLocations || [],
       totalStops: ride.dropLocations?.length || 1,
-      fare: ride.fare.total
+      fare: ride.fare.total,
+      isFreeRide: Boolean(ride.isFreeRide || ride.fare?.isFreeRide),
+      customerPayable: (ride.isFreeRide || ride.fare?.isFreeRide) ? 0 : (ride.fare?.customerPayable ?? ride.fare?.finalAmount ?? ride.fare?.total ?? 0),
+      driverPayoutAmount: ride.fare?.driverPayoutAmount || ride.fare?.distanceFare || ride.fare?.total || 0,
+      driverPaymentNote: ride.fare?.driverPaymentNote || ((ride.isFreeRide || ride.fare?.isFreeRide) ? 'Customer Free Ride: Collect ₹0 from customer. GoDelivo will credit the full fare to your driver wallet upon completion.' : null)
     };
 
     // Notify customer
@@ -3712,7 +3872,11 @@ export const acceptRideWithSocket = async (req, res) => {
         totalStops: ride.dropLocations?.length || 1,
         eta: etaToPickup,
         etaText: `${etaToPickup} mins`,
-        fare: ride.fare.total
+        fare: ride.fare.total,
+        isFreeRide: Boolean(ride.isFreeRide || ride.fare?.isFreeRide),
+        customerPayable: (ride.isFreeRide || ride.fare?.isFreeRide) ? 0 : (ride.fare?.customerPayable ?? ride.fare?.finalAmount ?? ride.fare?.total ?? 0),
+        driverPayoutAmount: ride.fare?.driverPayoutAmount || ride.fare?.distanceFare || ride.fare?.total || 0,
+        driverPaymentNote: ride.fare?.driverPaymentNote || ((ride.isFreeRide || ride.fare?.isFreeRide) ? 'Customer Free Ride: Collect ₹0 from customer. GoDelivo will credit the full fare to your driver wallet upon completion.' : null)
       }
     });
 
@@ -3943,6 +4107,24 @@ export const verifyRidePayment = async (req, res) => {
   } catch (error) {
     console.error('Verify ride payment error:', error);
     res.status(500).json({ success: false, message: 'Failed to verify payment' });
+  }
+};
+
+// Get daily free ride status for customer (Bike / Scooty <= 2km, 1 ride per day)
+export const getCustomerFreeRideStatus = async (req, res) => {
+  try {
+    const customerId = req.customerId;
+    const status = await getCustomerDailyFreeRideStatus(customerId);
+    res.json({
+      success: true,
+      data: status
+    });
+  } catch (error) {
+    console.error('Get customer free ride status error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to get free ride status'
+    });
   }
 };
 
