@@ -915,9 +915,34 @@ export const requestRide = async (req, res) => {
     }
 
 
-    // ====== FREE RIDE CHECK: BIKE & SCOOTY <= 2KM (1 PER DAY PER USER) ======
+    // ====== FREE RIDE CHECK: BIKE & SCOOTY <= 2KM (STRICTLY 1 PER DAY PER USER ACROSS BIKE OR SCOOTY) ======
     const freeRideCheck = await checkDailyFreeRideEligibility(customerId, vehicleType, totalDistance);
     let isFreeRide = false;
+
+    // Check if client explicitly requested a free ride
+    const isFreeRideExplicitlyRequested = Boolean(
+      req.body.isFreeRide === true ||
+      req.body.isFreeRide === 'true' ||
+      paymentMethod === 'free' ||
+      paymentMethod === 'free_ride' ||
+      (reqAmount !== undefined && reqAmount !== null && parseFloat(reqAmount.toString().replace(/[^0-9.]/g, '')) === 0)
+    );
+
+    // If client requested a free ride but is NOT eligible (e.g. already used 1 ride today on Bike or Scooty):
+    if (isFreeRideExplicitlyRequested && !freeRideCheck.eligible) {
+      return res.status(400).json({
+        success: false,
+        errorType: 'DAILY_FREE_RIDE_LIMIT_EXCEEDED',
+        message: freeRideCheck.reason || 'Daily free ride limit reached. You can take only 1 free ride per day across Bike or Scooty.',
+        details: {
+          ridesAllowedPerDay: 1,
+          ridesRemainingToday: 0,
+          existingRideId: freeRideCheck.existingRideId || null,
+          usedVehicle: freeRideCheck.usedVehicle || null
+        }
+      });
+    }
+
     if (freeRideCheck.eligible) {
       fare = applyFreeRideToFare(fare);
       isFreeRide = true;
@@ -928,6 +953,12 @@ export const requestRide = async (req, res) => {
         originalFare: fare.originalFare?.finalAmount,
         driverPayoutAmount: fare.driverPayoutAmount
       });
+    }
+
+    // Sanitize paymentMethod: 'free' or 'free_ride' can ONLY be used if isFreeRide is genuinely true!
+    let sanitizedPaymentMethod = paymentMethod;
+    if (!isFreeRide && (sanitizedPaymentMethod === 'free' || sanitizedPaymentMethod === 'free_ride')) {
+      sanitizedPaymentMethod = 'cash';
     }
 
     // The final/last drop location for backward compatibility
@@ -1006,8 +1037,8 @@ export const requestRide = async (req, res) => {
       platformFeeDetails: isFreeRide 
         ? { amount: 0, currency: 'INR', feeType: 'platform_fee', charged: false, reason: 'Waived for GoDelivo Free Ride' }
         : (fare.platformFeeDetails || PRICING_CONFIG.getPlatformFeeDetails(fare.platformFee || 1)),
-      paymentMethod: isFreeRide ? 'free' : paymentMethod,
-      paymentCollectedBy: isFreeRide ? 'godelivo' : (paymentMethod === 'cash' || paymentMethod === 'wallet' ? 'customer' : paymentCollectedBy),
+      paymentMethod: isFreeRide ? 'free' : sanitizedPaymentMethod,
+      paymentCollectedBy: isFreeRide ? 'godelivo' : (sanitizedPaymentMethod === 'cash' || sanitizedPaymentMethod === 'wallet' ? 'customer' : paymentCollectedBy),
       paymentStatus: isFreeRide ? 'sponsored' : 'pending',
       status: 'requested',
       statusHistory: [{
@@ -3454,25 +3485,29 @@ export const calculateFareEstimate = async (req, res) => {
 
     totalDistance = parseFloat(totalDistance.toFixed(2));
 
-    // Check if logged-in customer is a merchant
+    // Check if logged-in customer is a merchant (support auth header or query)
     let isMerchant = false;
-    const targetCustId = req.customerId || req.query.customerId;
-    if (targetCustId) {
-      const cust = await Customer.findById(targetCustId).select('isMerchant');
-      if (cust) isMerchant = cust.isMerchant || false;
-    } else if (req.headers?.authorization && req.headers.authorization.startsWith('Bearer ')) {
+    let targetCustId = req.customerId || req.query.customerId;
+    if (!targetCustId && req.headers?.authorization) {
       try {
-        const token = req.headers.authorization.split(' ')[1];
+        let token = req.headers.authorization;
+        if (token.startsWith('Bearer ')) token = token.split(' ')[1];
         if (token) {
           const decoded = jwt.verify(token, process.env.JWT_SECRET);
-          if (decoded && decoded.id) {
-            const cust = await Customer.findById(decoded.id).select('isMerchant');
-            if (cust) isMerchant = cust.isMerchant || false;
+          if (decoded && (decoded.id || decoded.customerId)) {
+            targetCustId = decoded.id || decoded.customerId;
           }
         }
       } catch (e) {
         // Public endpoint ignore invalid token
       }
+    }
+
+    if (targetCustId) {
+      try {
+        const cust = await Customer.findById(targetCustId).select('isMerchant');
+        if (cust) isMerchant = cust.isMerchant || false;
+      } catch (e) {}
     }
 
     // Calculate fare based on total cumulative distance
@@ -3564,6 +3599,13 @@ export const calculateFareEstimate = async (req, res) => {
         } : {
           isFreeRide: false,
           reason: freeRideCheck.reason
+        },
+        freeRidePolicy: {
+          dailyLimit: 1,
+          ridesRemainingToday: targetCustId ? (freeRideCheck.eligible ? 1 : 0) : 1,
+          isEligible: Boolean(freeRideCheck.eligible),
+          sharedAcrossVehicles: ['bike', 'scooty', 'scooter'],
+          note: 'Strict limit: 1 free ride per user per day (shared across Bike and Scooty). Once 1 ride is used, other rides are charged standard fare.'
         },
         fare: {
           distanceFare: estimatedFare.distanceFare,

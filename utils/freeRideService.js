@@ -1,17 +1,38 @@
 import mongoose from 'mongoose';
 import Ride from '../models/Ride.js';
+import Customer from '../models/Customer.js';
+
+/**
+ * Calculates start and end of current day in Indian Standard Time (IST = UTC+5:30)
+ * Ensures midnight-to-midnight accuracy regardless of server timezone.
+ */
+export const getISTDayRange = () => {
+  const now = new Date();
+  const istOffsetMs = 5.5 * 60 * 60 * 1000;
+  const istNow = new Date(now.getTime() + istOffsetMs);
+
+  const year = istNow.getUTCFullYear();
+  const month = istNow.getUTCMonth();
+  const date = istNow.getUTCDate();
+
+  const startOfDay = new Date(Date.UTC(year, month, date, 0, 0, 0, 0) - istOffsetMs);
+  const endOfDay = new Date(Date.UTC(year, month, date, 23, 59, 59, 999) - istOffsetMs);
+
+  return { startOfDay, endOfDay };
+};
 
 /**
  * Checks whether a customer is eligible for GoDelivo's daily free ride.
- * Criteria:
+ * Strict Criteria:
  * 1. Vehicle: bike, scooty, scooter
- * 2. Distance: <= 2 km (2 km ke andar)
- * 3. Limit: 1 free ride per customer per day (non-cancelled)
+ * 2. Distance: <= 2.0 km (under 2 km)
+ * 3. Limit: Strictly 1 FREE RIDE per user per calendar day (shared across Bike AND Scooty).
+ *    Once a user uses a free ride on Bike, they CANNOT use it on Scooty (or vice versa).
  *
  * @param {string|ObjectId} customerId 
  * @param {string} vehicleType 
  * @param {number} distance in km
- * @returns {Promise<{eligible: boolean, reason: string, isFreeRide: boolean, existingRideId?: string}>}
+ * @returns {Promise<{eligible: boolean, reason: string, isFreeRide: boolean, existingRideId?: string, usedVehicle?: string}>}
  */
 export const checkDailyFreeRideEligibility = async (customerId, vehicleType, distance) => {
   const vType = (vehicleType || '').toLowerCase().trim();
@@ -35,44 +56,83 @@ export const checkDailyFreeRideEligibility = async (customerId, vehicleType, dis
     };
   }
 
-  // If customerId is not available (e.g. unauthenticated estimate check)
+  // If customerId is not available (e.g. unauthenticated public estimate check)
   if (!customerId) {
     return {
       eligible: true,
       isFreeRide: true,
-      reason: 'Eligible for GoDelivo Daily Free Ride (Under 2km on Bike/Scooty)'
+      reason: 'Eligible for GoDelivo Daily Free Ride (Under 2km on Bike/Scooty, 1 ride/day/user limit applies)',
+      dailyLimit: 1
     };
   }
 
-  // Get start and end of current local day
-  const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-  const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  const custObjId = mongoose.Types.ObjectId.isValid(customerId)
+    ? new mongoose.Types.ObjectId(customerId)
+    : null;
 
-  // Check if customer already used their 1 free ride today (excluding cancelled rides)
+  // Fetch phone to prevent bypass via duplicate IDs
+  let customerPhone = null;
+  try {
+    if (custObjId) {
+      const custDoc = await Customer.findById(custObjId).select('phone').lean();
+      customerPhone = custDoc?.phone;
+    }
+  } catch (e) {}
+
+  const customerFilters = [];
+  if (custObjId) {
+    customerFilters.push({ 'customer.customerId': custObjId });
+    customerFilters.push({ 'customer.customerId': custObjId.toString() });
+  } else if (customerId) {
+    customerFilters.push({ 'customer.customerId': customerId });
+  }
+  if (customerPhone) {
+    customerFilters.push({ 'customer.phone': customerPhone });
+  }
+
+  const { startOfDay, endOfDay } = getISTDayRange();
+
+  // Check if customer already used their 1 free ride today (shared across Bike & Scooty)
+  // Non-cancelled rides where:
+  // - isFreeRide: true OR
+  // - fare.isFreeRide: true OR
+  // - paymentMethod is 'free' or 'free_ride'
   const existingFreeRide = await Ride.findOne({
-    'customer.customerId': customerId,
-    $or: [
-      { isFreeRide: true },
-      { 'fare.isFreeRide': true }
-    ],
-    status: { $nin: ['cancelled'] },
-    createdAt: { $gte: startOfDay, $lte: endOfDay }
-  });
+    $or: customerFilters,
+    $and: [
+      {
+        $or: [
+          { isFreeRide: true },
+          { 'fare.isFreeRide': true },
+          { paymentMethod: 'free' },
+          { paymentMethod: 'free_ride' }
+        ]
+      },
+      {
+        status: { $nin: ['cancelled'] }
+      },
+      {
+        createdAt: { $gte: startOfDay, $lte: endOfDay }
+      }
+    ]
+  }).sort({ createdAt: -1 });
 
   if (existingFreeRide) {
+    const usedVehicle = existingFreeRide.requestedVehicleType || existingFreeRide.vehicleType || 'two-wheeler';
     return {
       eligible: false,
       isFreeRide: false,
-      reason: 'Daily free ride limit reached (1 free ride allowed per day per user)',
-      existingRideId: existingFreeRide.rideId
+      reason: `Daily free ride limit reached. You already took your 1 free ride for today (${usedVehicle} - #${existingFreeRide.rideId}). Only 1 free ride per user per day is allowed across Bike or Scooty.`,
+      existingRideId: existingFreeRide.rideId,
+      usedVehicle
     };
   }
 
   return {
     eligible: true,
     isFreeRide: true,
-    reason: 'Eligible for GoDelivo Daily Free Ride (Under 2km on Bike/Scooty)'
+    reason: 'Eligible for GoDelivo Daily Free Ride (Under 2km on Bike/Scooty)',
+    dailyLimit: 1
   };
 };
 
@@ -134,36 +194,76 @@ export const applyFreeRideToFare = (standardFare) => {
  * @returns {Promise<object>}
  */
 export const getCustomerDailyFreeRideStatus = async (customerId) => {
-  const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-  const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  const custObjId = mongoose.Types.ObjectId.isValid(customerId)
+    ? new mongoose.Types.ObjectId(customerId)
+    : null;
+
+  let customerPhone = null;
+  try {
+    if (custObjId) {
+      const custDoc = await Customer.findById(custObjId).select('phone').lean();
+      customerPhone = custDoc?.phone;
+    }
+  } catch (e) {}
+
+  const customerFilters = [];
+  if (custObjId) {
+    customerFilters.push({ 'customer.customerId': custObjId });
+    customerFilters.push({ 'customer.customerId': custObjId.toString() });
+  } else if (customerId) {
+    customerFilters.push({ 'customer.customerId': customerId });
+  }
+  if (customerPhone) {
+    customerFilters.push({ 'customer.phone': customerPhone });
+  }
+
+  const { startOfDay, endOfDay } = getISTDayRange();
 
   const existingRide = await Ride.findOne({
-    'customer.customerId': customerId,
-    $or: [
-      { isFreeRide: true },
-      { 'fare.isFreeRide': true }
-    ],
-    status: { $nin: ['cancelled'] },
-    createdAt: { $gte: startOfDay, $lte: endOfDay }
-  });
+    $or: customerFilters,
+    $and: [
+      {
+        $or: [
+          { isFreeRide: true },
+          { 'fare.isFreeRide': true },
+          { paymentMethod: 'free' },
+          { paymentMethod: 'free_ride' }
+        ]
+      },
+      {
+        status: { $nin: ['cancelled'] }
+      },
+      {
+        createdAt: { $gte: startOfDay, $lte: endOfDay }
+      }
+    ]
+  }).sort({ createdAt: -1 });
 
   const used = !!existingRide;
   return {
     eligible: !used,
     todayFreeRidesUsed: used ? 1 : 0,
     ridesRemainingToday: used ? 0 : 1,
+    totalDailyFreeRideLimit: 1,
+    sharedAcrossVehicles: ['bike', 'scooty', 'scooter'],
     maxDistanceKm: 2.0,
-    allowedVehicles: ['bike', 'scooty', 'scooter'],
     existingRide: used ? {
       rideId: existingRide.rideId,
       status: existingRide.status,
+      vehicleType: existingRide.requestedVehicleType || existingRide.vehicleType,
       createdAt: existingRide.createdAt
     } : null,
     message: used 
-      ? 'Daily free ride already used for today (1 ride/day limit reached). Renews tomorrow!'
-      : 'You have 1 FREE ride (up to 2 km) on Bike or Scooty available today!',
+      ? `Daily free ride already used today (${existingRide.requestedVehicleType || existingRide.vehicleType || 'Bike/Scooty'} - #${existingRide.rideId}). Limit is 1 free ride per day across Bike or Scooty. Renews tomorrow!`
+      : 'You have 1 FREE ride (up to 2 km) available today on Bike or Scooty!',
     sponsoredBy: 'GoDelivo',
     driverPayoutNote: 'Payment will be credited directly to the driver wallet by GoDelivo upon completion.'
   };
+};
+
+export default {
+  getISTDayRange,
+  checkDailyFreeRideEligibility,
+  applyFreeRideToFare,
+  getCustomerDailyFreeRideStatus
 };
