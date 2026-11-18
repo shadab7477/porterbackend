@@ -61,12 +61,13 @@ const driverAuthMiddleware = async (req, res, next) => {
       console.log('Driver/application not found or not yet created:', err.message);
     }
     
-    // For registration and subscription routes, we don't require a Driver
-    // document yet because payment can happen from the application flow.
+    // For registration, subscription, and notification routes, we allow access
+    // even if driver document or verification is still in progress.
     const isRegistrationRoute = req.path === '/register' || req.path === '/status/:phone';
     const isSubscriptionRoute = req.path.startsWith('/subscription/');
+    const isNotificationRoute = req.path.startsWith('/notifications');
     
-    if (!isRegistrationRoute && !isSubscriptionRoute && !driver) {
+    if (!isRegistrationRoute && !isSubscriptionRoute && !isNotificationRoute && !driver) {
       return res.status(401).json({
         success: false,
         message: 'Driver not found. Please complete registration first.'
@@ -75,7 +76,7 @@ const driverAuthMiddleware = async (req, res, next) => {
 
     // Attach driver and decoded info to request (including block status)
     req.driver = {
-      id: decoded.id || null,
+      id: decoded.id || driver?._id || application?._id || null,
       phone: decoded.phone,
       name: driver?.name || application?.fullName || null,
       isVerified: application?.verificationStatus === 'verified' || false,
@@ -84,8 +85,8 @@ const driverAuthMiddleware = async (req, res, next) => {
       applicationId: application?._id || application || null
     };
 
-    // For protected routes (non-registration), check if driver is verified
-    if (!isRegistrationRoute && !isSubscriptionRoute && driver && application) {
+    // For protected routes (non-registration, non-notification), check if driver is verified
+    if (!isRegistrationRoute && !isSubscriptionRoute && !isNotificationRoute && driver && application) {
       if (application.verificationStatus !== 'verified') {
         return res.status(403).json({
           success: false,

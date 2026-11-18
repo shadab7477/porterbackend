@@ -24,6 +24,11 @@ import {
   updateLocation,
   getDriverStats
 } from '../controllers/driverController.js';
+import {
+  getDriverNotifications,
+  markDriverNotificationRead,
+  markAllDriverNotificationsRead
+} from '../controllers/driverNotificationController.js';
 import uploadMiddleware from '../middleware/uploadMiddleware.js';
 import driverAuthMiddleware from '../middleware/driverAuthMiddleware.js';
 import adminAuth from '../middleware/adminAuth.js';
@@ -89,6 +94,11 @@ router.post('/location', driverAuthMiddleware, updateLocation);
 
 // Stats
 router.get('/stats', driverAuthMiddleware, getDriverStats);
+
+// Notifications
+router.get('/notifications', driverAuthMiddleware, getDriverNotifications);
+router.put('/notifications/read-all', driverAuthMiddleware, markAllDriverNotificationsRead);
+router.put('/notifications/:id/read', driverAuthMiddleware, markDriverNotificationRead);
 
 
 // ==================== SUBSCRIPTION PAYMENT ROUTES ====================

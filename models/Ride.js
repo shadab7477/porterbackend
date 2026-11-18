@@ -196,9 +196,10 @@ const rideSchema = new mongoose.Schema({
   },
   // 'customer' = customer pays before ride starts
   // 'receiver' = receiver pays at drop location via driver's device
+  // 'godelivo' = free ride, platform credits driver directly
   paymentCollectedBy: {
     type: String,
-    enum: ['customer', 'receiver'],
+    enum: ['customer', 'receiver', 'godelivo', 'godelivo_platform'],
     default: 'customer'
   },
 
