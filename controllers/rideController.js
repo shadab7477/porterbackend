@@ -878,12 +878,13 @@ export const requestRide = async (req, res) => {
     // Always calculate the accurate fare first
     let fare = await Ride.calculateFare(totalDistance, vehicleType, isMerchant);
     
-    // If frontend sent a custom amount, use it (and reverse-engineer the breakdown so we don't double charge)
-    if (reqAmount) {
+    // If frontend sent a custom positive amount, use it (and reverse-engineer the breakdown so we don't double charge).
+    // Note: If reqAmount is 0 (or '0') for a free ride, we preserve the standard calculated fare so driverPayoutAmount is accurate!
+    if (reqAmount !== undefined && reqAmount !== null) {
       const parsedAmount = parseFloat(reqAmount.toString().replace(/[^0-9.]/g, '')) || 0;
       
-      // If the frontend amount differs from our calculation, it's a custom override
-      if (Math.abs(parsedAmount - fare.finalAmount) > 2) {
+      // If the frontend amount is positive and differs from our calculation, it's a custom override
+      if (parsedAmount > 0 && Math.abs(parsedAmount - fare.finalAmount) > 2) {
         const baseDistanceFare = isMerchant 
           ? Math.round(parsedAmount / (1 + merchantPriceIncreasePercent / 100))
           : parsedAmount;
